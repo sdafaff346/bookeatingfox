@@ -152,12 +152,13 @@ function hasChat() {
 /** Per-chat storage (chatMetadata). Never cache the returned object across chats. */
 function data() {
     const meta = ctx().chatMetadata;
-    if (!meta) return { bookmarks: [], notes: [], chapters: [] };
+    if (!meta) return { bookmarks: [], notes: [], chapters: [], scrapbooks: [], review: { rating: 0, text: '' } };
     if (!meta[META_KEY] || typeof meta[META_KEY] !== 'object') {
         meta[META_KEY] = { v: 1, bookmarks: [], notes: [], chapters: [] };
     }
     const d = meta[META_KEY];
-    for (const k of ['bookmarks', 'notes', 'chapters']) if (!Array.isArray(d[k])) d[k] = [];
+    for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks']) if (!Array.isArray(d[k])) d[k] = [];
+    if (!d.review || typeof d.review !== 'object') d.review = { rating: 0, text: '' };
     return d;
 }
 
@@ -473,6 +474,8 @@ async function deleteNote(id, confirm = true) {
     }
     const d = data();
     d.notes = d.notes.filter(x => x !== n);
+    for (const sb of d.scrapbooks) sb.noteIds = sb.noteIds.filter(x => x !== id);
+    ui.selected.delete(id);
     staleNotes.delete(id);
     persist();
     decorateMessage(n.mesId);
@@ -536,8 +539,8 @@ function openMemoEditor({ note = null, pending = null, mesId = null }) {
         ${quoteHtml}
         <textarea id="stbs-memo-input" class="text_pole stbs-textarea" rows="6" placeholder="이 문장에 대한 생각을 남겨보세요">${esc(note?.memo ?? '')}</textarea>
         <div class="stbs-row stbs-end">
-            <div class="menu_button" data-act="modal-close">취소</div>
-            <div class="menu_button stbs-primary" id="stbs-memo-save">저장</div>
+            <div class="stbs-btn" data-act="modal-close">취소</div>
+            <div class="stbs-btn stbs-primary" id="stbs-memo-save">저장</div>
         </div>`);
     const ta = body.querySelector('#stbs-memo-input');
     setTimeout(() => ta.focus(), 30);
@@ -724,7 +727,9 @@ const onSelectionChange = debounce(() => {
 
 function wrapLines(g, text, maxW) {
     const lines = [];
-    for (const para of String(text).split(/\n+/)) {
+    const paras = String(text).replace(/\n{3,}/g, '\n\n').split('\n');
+    for (const para of paras) {
+        if (!para.trim()) { if (lines.length && lines[lines.length - 1] !== '') lines.push(''); continue; }
         const words = para.split(/(\s+)/);
         let line = '';
         for (const w of words) {
@@ -820,10 +825,10 @@ function loadFoxImage() {
     });
 }
 
-function openCard({ text, mesId }) {
+function openCard({ text, mesId, who }) {
     const s = settings();
     const ch = chapterOf(mesId);
-    const info = { text: text || plain(msg(mesId)?.mes), who: speaker(mesId), chapter: sortedChapters().length ? chapterLabel(ch) : '', source: ctx().getCurrentChatId?.() || '' };
+    const info = { text: text || plain(msg(mesId)?.mes), who: who ?? speaker(mesId), chapter: sortedChapters().length ? chapterLabel(ch) : '', source: ctx().getCurrentChatId?.() || '' };
     const themes = Object.entries(CARD_THEMES).map(([k, t]) =>
         `<div class="stbs-chip ${k === s.cardTheme ? 'active' : ''}" data-theme="${k}"><span class="stbs-swatch" style="background:linear-gradient(135deg,${t.bg[0]},${t.bg[1]})"></span>${t.name}</div>`).join('');
     const body = openModal('명대사 카드', `
@@ -837,8 +842,8 @@ function openCard({ text, mesId }) {
             <input id="stbs-card-ch" class="text_pole" placeholder="챕터/출처" value="${esc(info.chapter)}">
         </div>
         <div class="stbs-row stbs-end">
-            <div class="menu_button" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
-            <div class="menu_button stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG 저장</div>
+            <div class="stbs-btn" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
+            <div class="stbs-btn stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG 저장</div>
         </div>`, { wide: true });
     const canvas = body.querySelector('#stbs-card-canvas');
     let theme = s.cardTheme;
@@ -898,7 +903,187 @@ const ui = {
     q: '',
     scope: 'all',
     chapterScope: 'all',
+    scrap: null,          // open scrapbook id in the notes tab
+    selecting: false,     // multi-select mode in the notes tab
+    selected: new Set(),
 };
+
+// ---------------------------------------------------------------- rating & one-line review
+
+const SCRAP_EMOJI = ['📒', '📕', '📗', '📘', '💌', '☔', '🌸', '🌙', '🔥', '🍂'];
+
+function starsHtml(r, size = '') {
+    const n = Math.max(0, Math.min(5, Math.round(Number(r) || 0)));
+    return `<span class="stbs-stars ${size}">${'★'.repeat(n)}<i>${'★'.repeat(5 - n)}</i></span>`;
+}
+
+function reviewTarget(target) {
+    const d = data();
+    if (target === 'book') return { obj: d.review, title: '이 책(채팅)의 별점', sub: ctx().getCurrentChatId?.() || '' };
+    const c = d.chapters.find(x => x.id === target);
+    if (!c) return null;
+    const num = sortedChapters().indexOf(c) + 1;
+    return { obj: c, title: `${num}장의 별점`, sub: c.title };
+}
+
+function reviewStrip(target, compact = false) {
+    const t = reviewTarget(target);
+    if (!t) return '';
+    const r = Number(t.obj.rating) || 0;
+    const text = t.obj.review ?? t.obj.text ?? '';
+    if (!r && !text) {
+        return `<div class="stbs-review empty" data-act="rate" data-target="${target}">
+            <span class="stbs-review-lab">${target === 'book' ? '이 책의 별점' : '별점'}</span>${starsHtml(0)}<span class="stbs-review-hint">눌러서 별점과 한줄평 남기기</span></div>`;
+    }
+    return `<div class="stbs-review ${compact ? 'compact' : ''}" data-act="rate" data-target="${target}">
+        <div class="stbs-review-top"><span class="stbs-review-lab">${target === 'book' ? '이 책의 별점' : '별점'}</span>${starsHtml(r)}<b class="stbs-review-num">${r ? r.toFixed(1) : '–'}</b></div>
+        ${text ? `<p class="stbs-review-text">“${esc(text)}”</p>` : ''}
+    </div>`;
+}
+
+function openRatingEditor(target) {
+    const t = reviewTarget(target);
+    if (!t) return;
+    const isBook = target === 'book';
+    let rating = Number(t.obj.rating) || 0;
+    const text = isBook ? (t.obj.text || '') : (t.obj.review || '');
+    const body = openModal(esc(t.title), `
+        <div class="stbs-muted">${esc(clip(t.sub, 60))}</div>
+        <div class="stbs-star-pick" role="radiogroup" aria-label="별점">
+            ${[1, 2, 3, 4, 5].map(k => `<button type="button" class="stbs-star-btn" data-star="${k}" aria-label="${k}점">★</button>`).join('')}
+        </div>
+        <div class="stbs-star-caption" id="stbs-star-cap"></div>
+        <input id="stbs-oneline" class="text_pole" maxlength="80" placeholder="한줄평을 남겨 보세요 (80자까지)" value="${esc(text)}">
+        <div class="stbs-row stbs-end">
+            <div class="stbs-btn" id="stbs-rate-clear">지우기</div>
+            <div class="stbs-btn stbs-primary" id="stbs-rate-save">저장</div>
+        </div>`);
+    const CAPS = ['', '별로였어요', '그저 그래요', '괜찮았어요', '좋았어요', '인생 채팅이에요'];
+    const paint = () => {
+        body.querySelectorAll('.stbs-star-btn').forEach(b => b.classList.toggle('on', Number(b.dataset.star) <= rating));
+        body.querySelector('#stbs-star-cap').textContent = rating ? `${rating}점 · ${CAPS[rating]}` : '별을 눌러 주세요';
+    };
+    body.querySelector('.stbs-star-pick').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-star]');
+        if (!b) return;
+        const k = Number(b.dataset.star);
+        rating = rating === k ? 0 : k;
+        paint();
+    });
+    const save = (r, tx) => {
+        t.obj.rating = r;
+        if (isBook) t.obj.text = tx; else t.obj.review = tx;
+        t.obj.reviewed = Date.now();
+        persist();
+        closeModal();
+        refreshPanel();
+    };
+    body.querySelector('#stbs-rate-save').addEventListener('click', () => { save(rating, body.querySelector('#stbs-oneline').value.trim()); toastr.success('🦊 별점을 남겼어요.'); });
+    body.querySelector('#stbs-rate-clear').addEventListener('click', () => save(0, ''));
+    body.querySelector('#stbs-oneline').addEventListener('keydown', (e) => { if (e.key === 'Enter') body.querySelector('#stbs-rate-save').click(); });
+    paint();
+}
+
+// ---------------------------------------------------------------- scrapbooks (bundles of notes)
+
+function getScrap(id) {
+    return data().scrapbooks.find(x => x.id === id);
+}
+
+function scrapNotes(sb) {
+    const byId = new Map(data().notes.map(n => [n.id, n]));
+    return sb.noteIds.map(id => byId.get(id)).filter(Boolean);
+}
+
+function addToScrap(sbId, noteIds) {
+    const sb = getScrap(sbId);
+    if (!sb) return 0;
+    let added = 0;
+    for (const id of noteIds) if (!sb.noteIds.includes(id)) { sb.noteIds.push(id); added++; }
+    sb.updated = Date.now();
+    persist();
+    return added;
+}
+
+function openScrapEditor({ scrap = null, noteIds = [] } = {}) {
+    let emoji = scrap?.emoji || SCRAP_EMOJI[data().scrapbooks.length % SCRAP_EMOJI.length];
+    const body = openModal(scrap ? '스크랩북 이름 바꾸기' : '새 스크랩북', `
+        <div class="stbs-emoji-pick">${SCRAP_EMOJI.map(e => `<button type="button" class="stbs-emoji ${e === emoji ? 'on' : ''}" data-emoji="${e}">${e}</button>`).join('')}</div>
+        <input id="stbs-scrap-name" class="text_pole" maxlength="30" placeholder="예: 고백 장면 모음" value="${esc(scrap?.name || '')}">
+        ${noteIds.length ? `<div class="stbs-muted">고른 노트 ${noteIds.length}개를 담아요.</div>` : ''}
+        <div class="stbs-row stbs-end">
+            <div class="stbs-btn" data-act="modal-close">취소</div>
+            <div class="stbs-btn stbs-primary" id="stbs-scrap-save">${scrap ? '저장' : '만들기'}</div>
+        </div>`);
+    const input = body.querySelector('#stbs-scrap-name');
+    setTimeout(() => input.focus(), 30);
+    body.querySelector('.stbs-emoji-pick').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-emoji]');
+        if (!b) return;
+        emoji = b.dataset.emoji;
+        body.querySelectorAll('.stbs-emoji').forEach(x => x.classList.toggle('on', x === b));
+    });
+    const save = () => {
+        const name = input.value.trim() || '이름 없는 스크랩북';
+        if (scrap) { scrap.name = name; scrap.emoji = emoji; scrap.updated = Date.now(); persist(); }
+        else {
+            const sb = { id: uid(), name, emoji, noteIds: [], created: Date.now(), updated: Date.now() };
+            data().scrapbooks.push(sb);
+            if (noteIds.length) addToScrap(sb.id, noteIds); else persist();
+            toastr.success(`🦊 "${name}" 스크랩북을 만들었어요.`);
+            if (noteIds.length) endSelecting();
+        }
+        closeModal();
+        refreshPanel();
+    };
+    body.querySelector('#stbs-scrap-save').addEventListener('click', save);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+}
+
+function openScrapPicker(noteIds) {
+    const list = data().scrapbooks;
+    if (!list.length) { openScrapEditor({ noteIds }); return; }
+    const body = openModal('스크랩북에 담기', `
+        <div class="stbs-muted">고른 노트 ${noteIds.length}개를 어디에 담을까요?</div>
+        <div class="stbs-scrap-pick">
+            ${list.map(sb => `<div class="stbs-item stbs-scrap-row" data-pick="${sb.id}"><span class="stbs-scrap-emoji">${esc(sb.emoji || '📒')}</span><div class="stbs-grow"><div class="stbs-item-title">${esc(sb.name)}</div><div class="stbs-meta">노트 ${scrapNotes(sb).length}개</div></div><i class="fa-solid fa-plus"></i></div>`).join('')}
+            <div class="stbs-btn stbs-wide-btn stbs-ghost" data-pick="__new"><i class="fa-solid fa-plus"></i> 새 스크랩북 만들어 담기</div>
+        </div>`);
+    body.addEventListener('click', (e) => {
+        const pick = e.target.closest('[data-pick]')?.dataset.pick;
+        if (!pick) return;
+        if (pick === '__new') { openScrapEditor({ noteIds }); return; }
+        const added = addToScrap(pick, noteIds);
+        closeModal();
+        toastr.success(added ? `🦊 ${added}개를 담았어요.` : '이미 다 들어 있어요.');
+        endSelecting();
+        refreshPanel();
+    });
+}
+
+async function deleteScrap(id) {
+    const sb = getScrap(id);
+    if (!sb) return;
+    const ok = await ctx().Popup.show.confirm('스크랩북 삭제', `"${esc(sb.name)}" 스크랩북을 지울까요? (안에 든 노트는 그대로 남아요)`);
+    if (!ok) return;
+    const d = data();
+    d.scrapbooks = d.scrapbooks.filter(x => x !== sb);
+    ui.scrap = null;
+    persist();
+    refreshPanel();
+}
+
+function cardFromNotes(notes) {
+    if (!notes.length) return;
+    const text = notes.map(n => n.start != null ? n.quote : plain(msg(n.mesId)?.mes)).join('\n\n');
+    const speakers = [...new Set(notes.map(n => speaker(n.mesId)))];
+    openCard({ text, mesId: notes[0].mesId, who: speakers.length === 1 ? speakers[0] : '' });
+}
+
+function endSelecting() {
+    ui.selecting = false;
+    ui.selected.clear();
+}
 
 function panelOpen() {
     return $id('stbs-panel')?.classList.contains('open');
@@ -1161,9 +1346,9 @@ function renderToc() {
     const entries = [];
     if (!chapters.length || chapters[0].mesId > 0) entries.push({ id: '__prologue', title: chapters.length ? '프롤로그' : '처음부터', mesId: 0, num: 0 });
     chapters.forEach((c, k) => entries.push({ ...c, num: k + 1 }));
-    let html = `
+    let html = reviewStrip('book') + `
         <div class="stbs-hint">메시지 <i class="fa-solid fa-ellipsis"></i> 메뉴의 <i class="fa-solid fa-book-open"></i> 버튼으로 원하는 위치에서 챕터를 시작할 수 있어요.</div>
-        <div class="menu_button stbs-wide-btn stbs-ghost" data-act="chapter-last"><i class="fa-solid fa-plus"></i> 마지막 메시지에서 새 챕터</div>`;
+        <div class="stbs-btn stbs-wide-btn stbs-ghost" data-act="chapter-last"><i class="fa-solid fa-plus"></i> 마지막 메시지에서 새 챕터</div>`;
     entries.forEach((e, k) => {
         const endId = (entries[k + 1]?.mesId ?? chat.length) - 1;
         let chars = 0;
@@ -1175,10 +1360,12 @@ function renderToc() {
         <div class="stbs-item stbs-toc" data-jump="${e.mesId}">
             <div class="stbs-toc-num">${e.num || '–'}</div>
             <div class="stbs-grow">
-                <div class="stbs-item-title">${esc(e.title)}</div>
+                <div class="stbs-item-title">${esc(e.title)}${e.rating ? ` ${starsHtml(e.rating, 'sm')}` : ''}</div>
+                ${e.review ? `<div class="stbs-snippet stbs-ch-review">“${esc(e.review)}”</div>` : ''}
                 <div class="stbs-meta">#${e.mesId}–#${Math.max(e.mesId, endId)} · 약 ${Math.max(1, Math.round(chars / cpp))}쪽${bm ? ` · 책갈피 ${bm}` : ''}${nt ? ` · 노트 ${nt}` : ''}</div>
             </div>
             ${isReal ? `<div class="stbs-actions">
+                <div class="stbs-icon-btn fa-regular fa-star" data-act="rate" data-target="${e.id}" title="별점 · 한줄평"></div>
                 <div class="stbs-icon-btn fa-solid fa-pen" data-act="chapter-rename" data-id="${e.id}" title="이름 바꾸기"></div>
                 <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="chapter-del" data-id="${e.id}" title="삭제"></div>
             </div>` : ''}
@@ -1208,9 +1395,69 @@ function renderBookmarks() {
     });
 }
 
+function noteCard(n, { inScrap = null } = {}) {
+    const s = settings();
+    const colorCss = n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : '';
+    const stale = staleNotes.has(n.id) ? '<span class="stbs-badge">원문 변경됨</span>' : '';
+    const quote = n.start != null
+        ? `<div class="stbs-note-quote">${esc(n.quote)}</div>`
+        : `<div class="stbs-note-quote stbs-whole"><span class="stbs-badge">메시지 전체</span> ${esc(clip(plain(msg(n.mesId)?.mes), 120))}</div>`;
+    const sel = ui.selecting;
+    const on = ui.selected.has(n.id);
+    const inBooks = data().scrapbooks.filter(sb => sb.noteIds.includes(n.id));
+    return `
+    <div class="stbs-note ${n.color == null ? 'no-color' : ''} ${sel ? 'selecting' : ''} ${on ? 'picked' : ''}" ${colorCss} data-jump="${n.mesId}" data-note="${n.id}">
+        ${sel ? `<span class="stbs-check ${on ? 'on' : ''}"><i class="fa-solid fa-check"></i></span>` : ''}
+        ${quote}
+        ${n.memo ? `<div class="stbs-note-memo">${esc(n.memo)}</div>` : ''}
+        <div class="stbs-note-foot">
+            <div class="stbs-meta">${esc(speaker(n.mesId))} · #${n.mesId} · ${fmtDate(n.updated)} ${stale}${!inScrap && inBooks.length ? ` <span class="stbs-badge">${esc(inBooks[0].emoji || '📒')} ${inBooks.length > 1 ? inBooks.length : esc(clip(inBooks[0].name, 8))}</span>` : ''}</div>
+            ${sel ? '' : `<div class="stbs-actions">
+                <div class="stbs-icon-btn fa-solid fa-pen" data-act="note-edit" data-id="${n.id}" title="메모 쓰기/수정"></div>
+                <div class="stbs-icon-btn fa-solid fa-quote-left" data-act="note-card" data-id="${n.id}" title="명대사 카드"></div>
+                ${inScrap
+                    ? `<div class="stbs-icon-btn fa-solid fa-folder-minus" data-act="scrap-remove" data-id="${n.id}" title="스크랩북에서 빼기"></div>`
+                    : `<div class="stbs-icon-btn fa-solid fa-trash-can" data-act="note-del" data-id="${n.id}" title="삭제"></div>`}
+            </div>`}
+        </div>
+    </div>`;
+}
+
+function selectionBar() {
+    if (!ui.selecting) return '';
+    const n = ui.selected.size;
+    return `<div class="stbs-selbar">
+        <span class="stbs-selbar-count">${n ? `${n}개 골랐어요` : '노트를 눌러 골라요'}</span>
+        <div class="stbs-btn ${n ? '' : 'disabled'}" data-act="sel-scrap"><i class="fa-solid fa-book-bookmark"></i> 스크랩북에 담기</div>
+        <div class="stbs-btn stbs-primary ${n ? '' : 'disabled'}" data-act="sel-card"><i class="fa-solid fa-quote-left"></i> 카드로 모으기</div>
+        <div class="stbs-icon-btn fa-solid fa-xmark" data-act="sel-cancel" title="그만 고르기"></div>
+    </div>`;
+}
+
+function renderScrapView(sb) {
+    const notes = scrapNotes(sb);
+    let html = `
+        <div class="stbs-scrap-head">
+            <div class="stbs-icon-btn fa-solid fa-chevron-left" data-act="scrap-back" title="모든 노트"></div>
+            <span class="stbs-scrap-emoji big">${esc(sb.emoji || '📒')}</span>
+            <div class="stbs-grow"><div class="stbs-scrap-title">${esc(sb.name)}</div><div class="stbs-meta">노트 ${notes.length}개 · ${fmtDate(sb.updated || sb.created)}</div></div>
+            <div class="stbs-icon-btn fa-solid fa-pen" data-act="scrap-rename" data-id="${sb.id}" title="이름 바꾸기"></div>
+            <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="scrap-del" data-id="${sb.id}" title="스크랩북 삭제"></div>
+        </div>`;
+    if (!notes.length) return html + emptyState('아직 빈 스크랩북이에요', '모든 노트에서 <b>고르기</b>를 눌러 노트를 담아 보세요.');
+    html += `<div class="stbs-btn stbs-wide-btn" data-act="scrap-card" data-id="${sb.id}"><i class="fa-solid fa-quote-left"></i> 이 스크랩북을 카드 한 장으로</div>`;
+    return html + notes.map(n => noteCard(n, { inScrap: sb })).join('');
+}
+
 function renderNotes() {
     const s = settings();
-    const all = data().notes;
+    const d = data();
+    const all = d.notes;
+    if (ui.scrap) {
+        const sb = getScrap(ui.scrap);
+        if (sb) return renderScrapView(sb);
+        ui.scrap = null;
+    }
     const counts = { all: all.length, none: all.filter(n => n.color == null).length, memo: all.filter(n => n.memo).length };
     s.colors.forEach((_, k) => { counts[k] = all.filter(n => n.color === k).length; });
     const f = ui.noteFilter;
@@ -1219,40 +1466,28 @@ function renderNotes() {
         ? list.sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1))
         : list.sort((a, b) => b.updated - a.updated);
 
+    let html = reviewStrip('book');
+    html += `<div class="stbs-shelf-head"><b>스크랩북</b>${d.scrapbooks.length ? `<span class="stbs-meta">${d.scrapbooks.length}권</span>` : ''}</div>
+        <div class="stbs-shelf">
+            ${d.scrapbooks.map(sb => `<div class="stbs-scrap-tile" data-act="scrap-open" data-id="${sb.id}"><span class="stbs-scrap-emoji">${esc(sb.emoji || '📒')}</span><b>${esc(sb.name)}</b><span class="stbs-meta">노트 ${scrapNotes(sb).length}</span></div>`).join('')}
+            <div class="stbs-scrap-tile add" data-act="scrap-new"><i class="fa-solid fa-plus"></i><b>새 스크랩북</b></div>
+        </div>`;
+
     const chip = (key, label) => `<div class="stbs-chip ${String(f) === String(key) ? 'active' : ''}" data-act="note-filter" data-f="${key}">${label}</div>`;
-    let html = `
+    html += `
         <div class="stbs-row stbs-wrap">
             ${chip('all', `전체 ${counts.all}`)}
             ${s.colors.map((c, k) => counts[k] ? chip(k, `<span class="stbs-swatch" style="background:${esc(c)}"></span>${counts[k]}`) : '').join('')}
             ${counts.none ? chip('none', `메모만 ${counts.none}`) : ''}
             ${counts.memo ? chip('memo', `메모 있는 것 ${counts.memo}`) : ''}
             <div class="stbs-chip stbs-sort" data-act="note-sort"><i class="fa-solid fa-arrow-down-wide-short"></i> ${ui.noteSort === 'story' ? '이야기 순' : '최근 순'}</div>
+            ${all.length ? `<div class="stbs-chip ${ui.selecting ? 'active' : ''}" data-act="sel-mode"><i class="fa-regular fa-square-check"></i> 고르기</div>` : ''}
         </div>`;
     if (!all.length) {
         return html + emptyState('여우가 맛있는 문장을 기다려요', '채팅에서 문장이나 문단을 드래그해 보세요.<br>형광펜을 칠하거나, 형광펜 없이 메모만 남길 수도 있어요.');
     }
-    const render = (n) => {
-        const colorCss = n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : '';
-        const stale = staleNotes.has(n.id) ? '<span class="stbs-badge">원문 변경됨</span>' : '';
-        const quote = n.start != null
-            ? `<div class="stbs-note-quote">${esc(n.quote)}</div>`
-            : `<div class="stbs-note-quote stbs-whole"><span class="stbs-badge">메시지 전체</span> ${esc(clip(plain(msg(n.mesId)?.mes), 120))}</div>`;
-        return `
-        <div class="stbs-note ${n.color == null ? 'no-color' : ''}" ${colorCss} data-jump="${n.mesId}" data-note="${n.id}">
-            ${quote}
-            ${n.memo ? `<div class="stbs-note-memo">${esc(n.memo)}</div>` : ''}
-            <div class="stbs-note-foot">
-                <div class="stbs-meta">${esc(speaker(n.mesId))} · #${n.mesId} · ${fmtDate(n.updated)} ${stale}</div>
-                <div class="stbs-actions">
-                    <div class="stbs-icon-btn fa-solid fa-pen" data-act="note-edit" data-id="${n.id}" title="메모 쓰기/수정"></div>
-                    <div class="stbs-icon-btn fa-solid fa-quote-left" data-act="note-card" data-id="${n.id}" title="명대사 카드"></div>
-                    <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="note-del" data-id="${n.id}" title="삭제"></div>
-                </div>
-            </div>
-        </div>`;
-    };
-    if (!list.length) return html + emptyState('조건에 맞는 노트가 없어요', '', false);
-    return html + (ui.noteSort === 'story' ? groupByChapter(list, render) : list.map(render).join(''));
+    if (!list.length) return html + emptyState('조건에 맞는 노트가 없어요', '', false) + selectionBar();
+    return html + (ui.noteSort === 'story' ? groupByChapter(list, n => noteCard(n)) : list.map(n => noteCard(n)).join('')) + selectionBar();
 }
 
 function renderSearch() {
@@ -1375,6 +1610,7 @@ function renderStats() {
                 <span class="stbs-eyebrow">여우가 냠냠 먹어치운 분량</span>
                 <div class="stbs-book-pages">${fmt(Math.max(1, st.pages))}<span class="stbs-unit">쪽</span></div>
                 <span class="stbs-meta">1쪽 = ${settings().charsPerPage}자 기준</span>
+                ${d.review?.rating ? `<span class="stbs-hero-stars" data-act="rate" data-target="book">${starsHtml(d.review.rating)} ${d.review.text ? `<em>“${esc(clip(d.review.text, 26))}”</em>` : ''}</span>` : ''}
             </div>
             <span class="stbs-avatar lg">${FOX_SVG}</span>
         </div>
@@ -1427,7 +1663,17 @@ function onPanelInput(e) {
 
 async function onPanelClick(e) {
     const tab = e.target.closest('[data-tab]');
-    if (tab) { ui.tab = tab.dataset.tab; renderPanel(); $id('stbs-body').scrollTop = 0; return; }
+    if (tab) { ui.tab = tab.dataset.tab; if (tab.dataset.tab !== 'notes') endSelecting(); renderPanel(); $id('stbs-body').scrollTop = 0; return; }
+    // multi-select mode: tapping a note card toggles it
+    if (ui.selecting && !e.target.closest('[data-act]')) {
+        const card = e.target.closest('.stbs-note[data-note]');
+        if (card) {
+            const id = card.dataset.note;
+            if (ui.selected.has(id)) ui.selected.delete(id); else ui.selected.add(id);
+            renderPanel();
+            return;
+        }
+    }
     const act = e.target.closest('[data-act]');
     if (act) {
         e.stopPropagation();
@@ -1463,6 +1709,28 @@ async function onPanelClick(e) {
             case 'note-card': { const n = getNote(id); if (n) openCard({ text: n.quote || plain(msg(n.mesId)?.mes), mesId: n.mesId }); break; }
             case 'note-del': await deleteNote(id); break;
             case 'search-word': ui.q = act.dataset.w; ui.tab = 'search'; renderPanel(); break;
+            case 'rate': openRatingEditor(act.dataset.target); break;
+            case 'scrap-open': ui.scrap = id; endSelecting(); renderPanel(); $id('stbs-body').scrollTop = 0; break;
+            case 'scrap-back': ui.scrap = null; renderPanel(); break;
+            case 'scrap-new': openScrapEditor(); break;
+            case 'scrap-rename': { const sb = getScrap(id); if (sb) openScrapEditor({ scrap: sb }); break; }
+            case 'scrap-del': await deleteScrap(id); break;
+            case 'scrap-card': { const sb = getScrap(id); if (sb) cardFromNotes(scrapNotes(sb)); break; }
+            case 'scrap-remove': {
+                const sb = getScrap(ui.scrap);
+                if (sb) { sb.noteIds = sb.noteIds.filter(x => x !== id); sb.updated = Date.now(); persist(); renderPanel(); }
+                break;
+            }
+            case 'sel-mode': if (ui.selecting) endSelecting(); else ui.selecting = true; renderPanel(); break;
+            case 'sel-cancel': endSelecting(); renderPanel(); break;
+            case 'sel-scrap': if (ui.selected.size) openScrapPicker([...ui.selected]); break;
+            case 'sel-card': {
+                if (!ui.selected.size) break;
+                const order = new Map(d.notes.map((n, k) => [n.id, k]));
+                const picked = d.notes.filter(n => ui.selected.has(n.id)).sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1) || order.get(a.id) - order.get(b.id));
+                cardFromNotes(picked);
+                break;
+            }
         }
         return;
     }
@@ -1483,11 +1751,15 @@ function buildMarkdown() {
     lines.push(`# 📖 ${title}`, '');
     lines.push(`> ${c.groupId ? '그룹 채팅' : `캐릭터: ${c.name2}`} · 내보낸 날짜: ${fmtDate(Date.now())}`);
     lines.push(`> 메시지 ${st.count}개 · ${st.chars.toLocaleString()}자 · 약 ${Math.round(st.pages)}쪽 · 책갈피 ${d.bookmarks.length} · 노트 ${d.notes.length}`, '');
+    const starTxt = (r) => '★'.repeat(r) + '☆'.repeat(5 - r);
+    if (d.review?.rating || d.review?.text) {
+        lines.push(`**별점** ${starTxt(Number(d.review.rating) || 0)}${d.review.text ? `  \n**한줄평** “${d.review.text}”` : ''}`, '');
+    }
 
     if (chapters.length) {
         lines.push('## 목차', '');
         if (chapters[0].mesId > 0) lines.push(`- 프롤로그 (#0)`);
-        chapters.forEach((ch, k) => lines.push(`${k + 1}. ${ch.title} (#${ch.mesId})`));
+        chapters.forEach((ch, k) => lines.push(`${k + 1}. ${ch.title} (#${ch.mesId})${ch.rating ? ` ${starTxt(ch.rating)}` : ''}${ch.review ? ` — “${ch.review}”` : ''}`));
         lines.push('');
     }
 
@@ -1517,6 +1789,18 @@ function buildMarkdown() {
         if (n.memo) { lines.push(...n.memo.split('\n').map(l => `📝 ${l}`), ''); }
         lines.push('---', '');
     });
+    if (d.scrapbooks.length) {
+        lines.push('## 📚 스크랩북', '');
+        for (const sb of d.scrapbooks) {
+            const ns = scrapNotes(sb);
+            lines.push(`### ${sb.emoji || '📒'} ${sb.name} (${ns.length})`, '');
+            for (const n of ns) {
+                const q = n.start != null ? n.quote : clip(plain(msg(n.mesId)?.mes), 200);
+                lines.push(...q.split('\n').map(l => `> ${l}`), `> — ${speaker(n.mesId)} · #${n.mesId}`, '');
+                if (n.memo) lines.push(`📝 ${n.memo.replace(/\n/g, ' ')}`, '');
+            }
+        }
+    }
     void colors;
     return lines.join('\n');
 }
@@ -1525,10 +1809,10 @@ function openExport() {
     if (!hasChat()) return;
     const body = openModal('내보내기 · 불러오기', `
         <div class="stbs-muted">지금 열린 채팅의 기록만 대상이에요.</div>
-        <div class="menu_button stbs-wide-btn" data-x="md"><i class="fa-solid fa-file-lines"></i> 마크다운(.md)으로 내보내기</div>
-        <div class="stbs-muted">목차, 책갈피, 형광펜, 메모를 읽기 좋게 정리한 문서예요.</div>
-        <div class="menu_button stbs-wide-btn" data-x="json"><i class="fa-solid fa-floppy-disk"></i> 백업 파일(.json) 저장</div>
-        <div class="menu_button stbs-wide-btn" data-x="import"><i class="fa-solid fa-file-import"></i> 백업 불러오기</div>
+        <div class="stbs-btn stbs-wide-btn" data-x="md"><i class="fa-solid fa-file-lines"></i> 마크다운(.md)으로 내보내기</div>
+        <div class="stbs-muted">목차, 별점·한줄평, 책갈피, 형광펜, 메모, 스크랩북을 읽기 좋게 정리한 문서예요.</div>
+        <div class="stbs-btn stbs-wide-btn" data-x="json"><i class="fa-solid fa-floppy-disk"></i> 백업 파일(.json) 저장</div>
+        <div class="stbs-btn stbs-wide-btn" data-x="import"><i class="fa-solid fa-file-import"></i> 백업 불러오기</div>
         <div class="stbs-muted">불러오면 지금 데이터에 합쳐져요. (같은 항목은 건너뜀)</div>
         <input type="file" id="stbs-import-file" accept=".json,application/json" hidden>`);
     const name = safeFileName(ctx().getCurrentChatId());
@@ -1549,10 +1833,12 @@ function openExport() {
             if (json?.format !== 'st-bookshelf' || !json.data) throw new Error('format');
             const d = data();
             let added = 0;
-            for (const k of ['bookmarks', 'notes', 'chapters']) {
+            if (json.data.review && !(d.review.rating || d.review.text)) d.review = { ...json.data.review };
+            for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks']) {
                 const have = new Set(d[k].map(x => x.id));
                 for (const item of json.data[k] || []) {
-                    if (!item || typeof item.mesId !== 'number' || have.has(item.id)) continue;
+                    if (!item || have.has(item.id)) continue;
+                    if (k === 'scrapbooks' ? !Array.isArray(item.noteIds) : typeof item.mesId !== 'number') continue;
                     d[k].push(item);
                     added++;
                 }
@@ -1702,7 +1988,7 @@ function onChatChanged() {
     hideSelPopup();
     closeModal();
     staleNotes.clear();
-    ui.q = ''; ui.chapterScope = 'all'; ui.noteFilter = 'all';
+    ui.q = ''; ui.chapterScope = 'all'; ui.noteFilter = 'all'; ui.scrap = null; endSelecting();
     reconcile();
     setTimeout(decorateAll, 50);
     refreshPanel();
@@ -1759,7 +2045,11 @@ function bindGlobal() {
         if (!e.target.closest?.('#stbs-sel-pop')) hideSelPopup();
     }, true);
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { hideSelPopup(); if ($id('stbs-modal')) closeModal(); }
+        if (e.key === 'Escape') {
+            hideSelPopup();
+            // Close only our top-most window; stop the browser from also closing the panel window underneath.
+            if ($id('stbs-modal')) { e.preventDefault(); e.stopPropagation(); closeModal(); }
+        }
     });
     $id('chat')?.addEventListener('scroll', repositionPopup, { passive: true });
 }
