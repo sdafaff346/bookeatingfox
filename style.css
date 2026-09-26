@@ -1,5 +1,4 @@
 /* 책 먹는 여우 (Book-Eating Fox) — v1.2 */
-@import url('https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&display=swap');
 
 :root {
     --stbs-c0: #ffe066;
@@ -380,6 +379,10 @@
 
 :is(#stbs-panel, #stbs-modal) .menu_button {
     display: inline-flex;
+    width: auto;
+    min-width: max-content;
+    white-space: nowrap;
+    flex-shrink: 0;
     align-items: center;
     justify-content: center;
     gap: 7px;
@@ -400,7 +403,7 @@
 :is(#stbs-panel, #stbs-modal) .menu_button i { color: var(--stbs-muted); }
 :is(#stbs-panel, #stbs-modal) .stbs-primary { background: var(--stbs-fg); color: var(--stbs-bg); }
 :is(#stbs-panel, #stbs-modal) .stbs-primary i { color: inherit; }
-.stbs-wide-btn { width: 100%; box-sizing: border-box; }
+:is(#stbs-panel, #stbs-modal) .stbs-wide-btn { width: 100%; min-width: 0; box-sizing: border-box; }
 #stbs-panel .stbs-ghost {
     background: transparent;
     border: 1px dashed var(--stbs-line2);
@@ -620,7 +623,11 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent);
 /* ================= modal ================= */
 #stbs-modal {
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
     z-index: 3040;
     background: rgba(15, 10, 6, .45);
     backdrop-filter: blur(3px);

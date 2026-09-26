@@ -378,7 +378,7 @@ async function jumpTo(i, noteId = null) {
     decorateChapters();
     const target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
     const mobile = isMobile() && panelOpen();
-    if (mobile) $id('stbs-panel').style.height = '42vh';
+    if (mobile) setSheetHeight($id('stbs-panel'), Math.round(window.innerHeight * 0.42));
     target.scrollIntoView({ behavior: 'smooth', block: mobile ? 'start' : 'center' });
     const flashEl = target === el ? el : target;
     flashEl.classList.remove('stbs-flash');
@@ -893,6 +893,22 @@ function buildPanel() {
     });
 }
 
+function setSheetHeight(p, h) {
+    p.style.height = `${Math.round(h)}px`;
+    p.style.top = `${Math.round(window.innerHeight - h)}px`;
+}
+
+/** Load the web font without tying extension activation to a third-party request. */
+function loadWebFont() {
+    if (document.getElementById('stbs-font')) return;
+    const link = document.createElement('link');
+    link.id = 'stbs-font';
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&display=swap';
+    link.onerror = () => link.remove();
+    document.head.appendChild(link);
+}
+
 /** Desktop: floating window at saved x/y/w/h. Mobile: bottom sheet with saved height. */
 function applyGeometry() {
     const p = $id('stbs-panel');
@@ -903,7 +919,10 @@ function applyGeometry() {
         p.classList.add('sheet');
         p.classList.remove('float');
         const h = Math.round(Math.min(0.95, Math.max(0.3, s.sheetH || 0.62)) * vh);
-        Object.assign(p.style, { left: '0px', top: 'auto', right: '0px', bottom: '0px', width: '100%', height: `${h}px` });
+        // Always position with top/left in px: some SillyTavern mobile layouts put a transform on <html>,
+        // which makes `bottom: 0` / `inset: 0` resolve against a zero-height box (panel ends up off-screen).
+        Object.assign(p.style, { left: '0px', right: 'auto', bottom: 'auto', width: `${vw}px` });
+        setSheetHeight(p, h);
         return;
     }
     p.classList.add('float');
@@ -934,7 +953,7 @@ function onPanelPointerDown(e) {
         const dx = ev.clientX - sx, dy = ev.clientY - sy;
         if (mobile) {
             const h = Math.min(window.innerHeight * 0.95, Math.max(80, rect.height - dy));
-            p.style.height = `${h}px`;
+            setSheetHeight(p, h);
         } else if (mode === 'move') {
             p.style.left = `${Math.min(Math.max(8 - rect.width + 120, rect.left + dx), window.innerWidth - 120)}px`;
             p.style.top = `${Math.min(Math.max(0, rect.top + dy), window.innerHeight - 48)}px`;
@@ -1609,6 +1628,7 @@ function bindGlobal() {
     $(document).on('click', '.stbs-mes-btn', function (e) {
         e.stopPropagation();
         if (!settings().enabled) { toastr.info(`${APP_NAME} 확장이 꺼져 있어요.`); return; }
+        if (!hasChat()) { toastr.info('채팅을 먼저 열어 주세요.'); return; }
         const i = Number($(this).closest('.mes').attr('mesid'));
         if (isNaN(i)) return;
         const act = this.dataset.stbs;
@@ -1656,6 +1676,7 @@ function injectTemplateButtons() {
     eventSource.on(event_types.APP_READY, () => {
         buildSettingsUI();
         buildWandItem();
+        loadWebFont();
         $id('stbs-send-btn')?.remove();
         $id('stbs-fab')?.remove();
         injectTemplateButtons();
