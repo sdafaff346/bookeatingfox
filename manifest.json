@@ -1,0 +1,13 @@
+{
+    "display_name": "책 먹는 여우 (Book-Eating Fox)",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "dependencies": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "koosean82",
+    "version": "1.3.0",
+    "homePage": "",
+    "auto_update": false
+}

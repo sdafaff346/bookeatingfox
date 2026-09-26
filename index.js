@@ -1,0 +1,1666 @@
+// 책 먹는 여우 (Book-Eating Fox) — bookmarks, Ridi-style reading notes, chapters, search,
+// stats, quote cards and export for SillyTavern chats. Vanilla JS, no dependencies.
+// Storage keys keep the old 'st_bookshelf' name so data from v1 carries over.
+
+const MODULE = 'st_bookshelf';
+const META_KEY = 'st_bookshelf';
+
+const DEFAULTS = Object.freeze({
+    enabled: true,
+    colors: ['#ffe066', '#8ce99a', '#74c0fc', '#f7a8c8'],
+    showHighlights: true,
+    showMemoUnderline: true,
+    showChapters: true,
+    showRibbon: true,
+    theme: 'auto',
+    charsPerPage: 600,
+    cardTheme: 'fox',
+    cardFox: true,
+    panel: null,
+    sheetH: 0.62,
+});
+
+// Original fox mascot (inline SVG, no external assets)
+// Mascot: 책을 문 여우 (original art)
+const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
+
+const APP_NAME = '책 먹는 여우';
+const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
+
+/** 'auto' → pick day/night from SillyTavern's body text brightness. */
+function resolvedTheme() {
+    const t = settings().theme || 'auto';
+    if (t !== 'auto') return t;
+    const m = getComputedStyle(document.body).color.match(/\d+(\.\d+)?/g);
+    if (!m) return 'night';
+    const [r, g, b] = m.map(Number);
+    const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    return lum < 0.5 ? 'day' : 'night';
+}
+
+function emptyState(title, sub = '', fox = true) {
+    return `<div class="stbs-empty">${fox ? `<div class="stbs-empty-fox">${FOX_SVG}</div>` : ''}<p class="stbs-empty-title">${title}</p>${sub ? `<p class="stbs-empty-sub">${sub}</p>` : ''}</div>`;
+}
+
+const COLOR_NAMES = ['노랑', '초록', '파랑', '분홍'];
+const COLOR_EMOJI = ['🟨', '🟩', '🟦', '🟪'];
+
+const CARD_THEMES = {
+    fox: { name: '여우', bg: ['#f7a261', '#d9622b'], fg: '#3b1f0e', sub: '#6e3a1a', accent: '#fff5e8' },
+    forest: { name: '밤숲', bg: ['#33402f', '#1a2419'], fg: '#f3ead9', sub: '#b6c2a4', accent: '#f08a3c' },
+    paper: { name: '종이', bg: ['#f7f1e3', '#efe6d2'], fg: '#3b3226', sub: '#8a7a62', accent: '#c9a96e' },
+    night: { name: '밤하늘', bg: ['#1d2340', '#0e1226'], fg: '#eef0ff', sub: '#9aa3d4', accent: '#f5d67b' },
+    rose: { name: '장미', bg: ['#fde2e4', '#f9c5cf'], fg: '#5a2a35', sub: '#a0616f', accent: '#d9667f' },
+    mint: { name: '민트', bg: ['#e3f6ef', '#c7ecdf'], fg: '#1f4b3f', sub: '#5f8f80', accent: '#3aa585' },
+    ink: { name: '먹', bg: ['#2b2b2b', '#161616'], fg: '#f3f3f3', sub: '#a8a8a8', accent: '#e85d4a' },
+};
+
+const STOPWORDS = new Set(('그리고 그런데 하지만 그래서 그러나 그러면 그렇게 이렇게 저렇게 그냥 정말 너무 조금 아주 다시 지금 이제 여기 거기 저기 ' +
+    '그는 그녀 그녀는 그녀의 그의 그가 그녀가 나는 내가 너는 네가 우리 우리는 당신 당신은 당신의 자신 자신의 ' +
+    '있는 있다 있었다 없는 없다 했다 하는 하고 하며 했고 했던 되는 된다 것이 것을 것은 것도 그것 이것 저것 ' +
+    '수 있 것 등 더 좀 잘 왜 뭐 어떻게 무슨 모든 같은 같이 한번 순간 듯 듯이 채 때 때문에 위해 ' +
+    'the and a an to of in on at for is are was were be been it its this that with as by from or but not you your he she his her they them i me my we our').split(/\s+/));
+
+// ---------------------------------------------------------------- helpers
+
+const ctx = () => SillyTavern.getContext();
+const $id = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function hash(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36) + str.length.toString(36);
+}
+
+/** Raw message markdown -> plain text for snippets/search/stats. */
+function plain(mes) {
+    return String(mes ?? '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/^[ \t]*(#{1,6}|>+)[ \t]+/gm, '')
+        .replace(/[*_~`]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function clip(s, n) {
+    s = String(s ?? '');
+    return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function fmtDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function debounce(fn, ms) {
+    let t;
+    return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+function download(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function safeFileName(s) {
+    return String(s || 'chat').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80);
+}
+
+// ---------------------------------------------------------------- settings
+
+function settings() {
+    const { extensionSettings } = ctx();
+    if (!extensionSettings[MODULE]) extensionSettings[MODULE] = structuredClone(DEFAULTS);
+    const s = extensionSettings[MODULE];
+    for (const k of Object.keys(DEFAULTS)) {
+        if (!Object.hasOwn(s, k)) s[k] = structuredClone(DEFAULTS[k]);
+    }
+    return s;
+}
+
+function saveSettings() {
+    ctx().saveSettingsDebounced();
+}
+
+function applyColorVars() {
+    const s = settings();
+    const root = document.documentElement;
+    s.colors.forEach((c, i) => root.style.setProperty(`--stbs-c${i}`, c));
+}
+
+// ---------------------------------------------------------------- chat data
+
+function hasChat() {
+    const c = ctx();
+    return !!c.getCurrentChatId?.() && Array.isArray(c.chat);
+}
+
+/** Per-chat storage (chatMetadata). Never cache the returned object across chats. */
+function data() {
+    const meta = ctx().chatMetadata;
+    if (!meta) return { bookmarks: [], notes: [], chapters: [] };
+    if (!meta[META_KEY] || typeof meta[META_KEY] !== 'object') {
+        meta[META_KEY] = { v: 1, bookmarks: [], notes: [], chapters: [] };
+    }
+    const d = meta[META_KEY];
+    for (const k of ['bookmarks', 'notes', 'chapters']) if (!Array.isArray(d[k])) d[k] = [];
+    return d;
+}
+
+function persist() {
+    const c = ctx();
+    if (!hasChat()) return;
+    (c.saveMetadata || c.saveMetadataDebounced)?.call(c);
+}
+
+const msg = (i) => ctx().chat?.[i];
+const sigAt = (i) => hash(String(msg(i)?.mes ?? ''));
+const speaker = (i) => {
+    const m = msg(i);
+    if (!m) return '';
+    return m.name || (m.is_user ? ctx().name1 : ctx().name2) || '';
+};
+
+/** Re-anchor items whose message moved (e.g. after a deletion). */
+function reconcile() {
+    if (!hasChat()) return false;
+    const d = data();
+    const chat = ctx().chat;
+    let changed = false;
+    const sigCache = new Map();
+    const sig = (i) => {
+        if (!sigCache.has(i)) sigCache.set(i, sigAt(i));
+        return sigCache.get(i);
+    };
+    for (const item of [...d.bookmarks, ...d.notes, ...d.chapters]) {
+        if (!item.sig) { item.sig = sig(item.mesId); changed = true; continue; }
+        if (item.mesId < chat.length && sig(item.mesId) === item.sig) continue;
+        for (let dist = 1; dist <= 80; dist++) {
+            const cand = [item.mesId - dist, item.mesId + dist].find(j => j >= 0 && j < chat.length && sig(j) === item.sig);
+            if (cand !== undefined) { item.mesId = cand; changed = true; break; }
+        }
+        if (item.mesId >= chat.length) { item.mesId = Math.max(0, chat.length - 1); changed = true; }
+    }
+    if (changed) persist();
+    return changed;
+}
+
+function sortedChapters() {
+    return [...data().chapters].sort((a, b) => a.mesId - b.mesId);
+}
+
+/** Chapter info for a message index: {num, title, mesId} or prologue. */
+function chapterOf(i, chapters = sortedChapters()) {
+    let found = null;
+    let num = 0;
+    chapters.forEach((c, k) => { if (c.mesId <= i) { found = c; num = k + 1; } });
+    if (!found) return { num: 0, title: '프롤로그', id: '__prologue', mesId: 0 };
+    return { num, title: found.title, id: found.id, mesId: found.mesId };
+}
+
+function chapterLabel(ch) {
+    return ch.num ? `${ch.num}장. ${ch.title}` : ch.title;
+}
+
+function bookmarkAt(i) {
+    return data().bookmarks.find(b => b.mesId === i);
+}
+
+// ---------------------------------------------------------------- DOM text ranges
+
+function mesTextEl(i) {
+    return document.querySelector(`#chat .mes[mesid="${i}"] .mes_text`);
+}
+
+function offsetIn(root, node, offset) {
+    const r = document.createRange();
+    r.setStart(root, 0);
+    r.setEnd(node, offset);
+    return r.toString().length;
+}
+
+function unwrapMarks(root) {
+    const marks = root.querySelectorAll('mark.stbs-hl');
+    if (!marks.length) return;
+    marks.forEach(m => m.replaceWith(...m.childNodes));
+    root.normalize();
+}
+
+/** Wrap text between [start,end) (textContent coordinates) in <mark> elements. */
+function wrapRange(root, start, end, make) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const targets = [];
+    let pos = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+        const len = node.data.length;
+        const s = Math.max(start, pos);
+        const e = Math.min(end, pos + len);
+        if (s < e) targets.push([node, s - pos, e - pos]);
+        pos += len;
+        if (pos >= end) break;
+    }
+    for (const [n, s, e] of targets) {
+        if (!n.data.slice(s, e).trim()) continue;
+        let mid = n;
+        if (s > 0) mid = n.splitText(s);
+        if (e - s < mid.data.length) mid.splitText(e - s);
+        const mark = make();
+        mid.parentNode.insertBefore(mark, mid);
+        mark.appendChild(mid);
+    }
+}
+
+function findNearest(text, quote, around) {
+    if (!quote) return -1;
+    let best = -1;
+    let bestDist = Infinity;
+    let idx = text.indexOf(quote);
+    while (idx !== -1) {
+        const dist = Math.abs(idx - around);
+        if (dist < bestDist) { best = idx; bestDist = dist; }
+        idx = text.indexOf(quote, idx + 1);
+    }
+    return best;
+}
+
+const staleNotes = new Set();
+
+// ---------------------------------------------------------------- chat decoration
+
+function decorateMessage(i) {
+    const s = settings();
+    const mesEl = document.querySelector(`#chat .mes[mesid="${i}"]`);
+    if (!mesEl) return;
+    ensureMesButtons(mesEl);
+    const on = s.enabled && hasChat();
+    mesEl.classList.toggle('stbs-bm', on && s.showRibbon && !!bookmarkAt(i));
+
+    const textEl = mesEl.querySelector('.mes_text');
+    if (!textEl || mesEl.querySelector('.edit_textarea')) return;
+    unwrapMarks(textEl);
+    if (!on) return;
+
+    const notes = data().notes.filter(n => n.mesId === i && n.start != null);
+    if (!notes.length) return;
+    const text = textEl.textContent;
+    let dirty = false;
+    for (const n of notes) {
+        let start = n.start;
+        if (text.slice(n.start, n.end) !== n.quote) {
+            start = findNearest(text, n.quote, n.start);
+            if (start === -1) { staleNotes.add(n.id); continue; }
+            n.start = start;
+            n.end = start + n.quote.length;
+            dirty = true;
+        }
+        staleNotes.delete(n.id);
+        const colored = n.color != null;
+        if (colored && !s.showHighlights) continue;
+        if (!colored && !s.showMemoUnderline) continue;
+        wrapRange(textEl, n.start, n.end, () => {
+            const m = document.createElement('mark');
+            m.className = 'stbs-hl' + (colored ? ` stbs-c${n.color}` : ' stbs-ul') + (n.memo ? ' stbs-has-memo' : '');
+            m.dataset.note = n.id;
+            if (n.memo) m.title = n.memo;
+            return m;
+        });
+    }
+    if (dirty) persist();
+}
+
+function decorateChapters() {
+    document.querySelectorAll('#chat .stbs-chapter-div').forEach(e => e.remove());
+    const s = settings();
+    if (!s.enabled || !s.showChapters || !hasChat()) return;
+    sortedChapters().forEach((c, k) => {
+        const mesEl = document.querySelector(`#chat .mes[mesid="${c.mesId}"]`);
+        if (!mesEl) return;
+        const div = document.createElement('div');
+        div.className = 'stbs-chapter-div';
+        div.dataset.chapter = c.id;
+        div.innerHTML = `<span class="stbs-chapter-line"></span><span class="stbs-chapter-title"><span class="stbs-ch-num">${k + 1}장</span>${esc(c.title)}</span><span class="stbs-chapter-line"></span>`;
+        mesEl.parentNode.insertBefore(div, mesEl);
+    });
+}
+
+function decorateAll() {
+    decorateChapters();
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => decorateMessage(Number(el.getAttribute('mesid'))));
+}
+
+const MES_BUTTONS = `
+<div class="mes_button stbs-mes-btn fa-solid fa-book-bookmark" data-stbs="bookmark" title="책갈피"></div>
+<div class="mes_button stbs-mes-btn fa-solid fa-book-open" data-stbs="chapter" title="여기서 새 챕터"></div>
+<div class="mes_button stbs-mes-btn fa-solid fa-note-sticky" data-stbs="memo" title="메시지에 메모"></div>
+<div class="mes_button stbs-mes-btn fa-solid fa-quote-left" data-stbs="card" title="명대사 카드"></div>`;
+
+function ensureMesButtons(root) {
+    const holder = root.querySelector('.extraMesButtons');
+    if (holder && !holder.querySelector('.stbs-mes-btn')) holder.insertAdjacentHTML('afterbegin', MES_BUTTONS);
+}
+
+// ---------------------------------------------------------------- navigation
+
+let showMoreFn = null;
+import('../../../../script.js').then(m => { showMoreFn = m.showMoreMessages ?? null; }).catch(() => { });
+
+async function ensureRendered(i) {
+    for (let n = 0; n < 500; n++) {
+        const el = document.querySelector(`#chat .mes[mesid="${i}"]`);
+        if (el) return el;
+        const btn = document.getElementById('show_more_messages');
+        if (!btn) return null;
+        if (showMoreFn) await showMoreFn();
+        else { btn.click(); await sleep(60); }
+    }
+    return null;
+}
+
+async function jumpTo(i, noteId = null) {
+    const el = await ensureRendered(i);
+    if (!el) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
+    decorateMessage(i);
+    decorateChapters();
+    const target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
+    const mobile = isMobile() && panelOpen();
+    if (mobile) $id('stbs-panel').style.height = '42vh';
+    target.scrollIntoView({ behavior: 'smooth', block: mobile ? 'start' : 'center' });
+    const flashEl = target === el ? el : target;
+    flashEl.classList.remove('stbs-flash');
+    void flashEl.offsetWidth;
+    flashEl.classList.add('stbs-flash');
+    setTimeout(() => flashEl.classList.remove('stbs-flash'), 1800);
+}
+
+// ---------------------------------------------------------------- actions
+
+async function toggleBookmark(i, askLabel = true) {
+    if (!hasChat() || !msg(i)) return;
+    const d = data();
+    const existing = bookmarkAt(i);
+    if (existing) {
+        d.bookmarks = d.bookmarks.filter(b => b !== existing);
+        toastr.info('책갈피를 뺐어요.');
+    } else {
+        let label = '';
+        if (askLabel) {
+            const res = await ctx().Popup.show.input('🦊 책갈피', '이름을 붙일 수 있어요. (비워두면 첫 줄이 이름이 돼요)', '');
+            if (res === null || res === false || res === undefined) return;
+            label = String(res).trim();
+        }
+        d.bookmarks.push({ id: uid(), mesId: i, label, created: Date.now(), sig: sigAt(i) });
+        toastr.success('🦊 책갈피를 꽂았어요.');
+    }
+    persist();
+    decorateMessage(i);
+    refreshPanel();
+}
+
+async function addChapter(i) {
+    if (!hasChat() || !msg(i)) return;
+    const d = data();
+    const existing = d.chapters.find(c => c.mesId === i);
+    const num = sortedChapters().filter(c => c.mesId < i).length + 1;
+    const res = await ctx().Popup.show.input(existing ? '챕터 이름 바꾸기' : `${num}장 시작`, '이 메시지부터 새 챕터가 시작돼요. 제목을 입력하세요.', existing?.title ?? '');
+    if (res === null || res === false || res === undefined) return;
+    const title = String(res).trim() || `${num}장`;
+    if (existing) existing.title = title;
+    else d.chapters.push({ id: uid(), mesId: i, title, created: Date.now(), sig: sigAt(i) });
+    persist();
+    decorateChapters();
+    refreshPanel();
+}
+
+async function renameChapter(id) {
+    const c = data().chapters.find(x => x.id === id);
+    if (c) await addChapter(c.mesId);
+}
+
+async function deleteChapter(id) {
+    const d = data();
+    const c = d.chapters.find(x => x.id === id);
+    if (!c) return;
+    const ok = await ctx().Popup.show.confirm('챕터 삭제', `"${esc(c.title)}" 챕터 구분을 지울까요? (메시지는 지워지지 않아요)`);
+    if (!ok) return;
+    d.chapters = d.chapters.filter(x => x !== c);
+    persist();
+    decorateChapters();
+    refreshPanel();
+}
+
+function createNote({ mesId, start = null, end = null, quote = '', color = null, memo = '' }) {
+    const n = { id: uid(), mesId, start, end, quote, color, memo, created: Date.now(), updated: Date.now(), sig: sigAt(mesId) };
+    data().notes.push(n);
+    persist();
+    decorateMessage(mesId);
+    refreshPanel();
+    return n;
+}
+
+function getNote(id) {
+    return data().notes.find(n => n.id === id);
+}
+
+function updateNote(id, patch) {
+    const n = getNote(id);
+    if (!n) return;
+    Object.assign(n, patch, { updated: Date.now() });
+    persist();
+    decorateMessage(n.mesId);
+    refreshPanel();
+}
+
+async function deleteNote(id, confirm = true) {
+    const n = getNote(id);
+    if (!n) return;
+    if (confirm && n.memo) {
+        const ok = await ctx().Popup.show.confirm('노트 삭제', '메모가 있는 노트예요. 지울까요?');
+        if (!ok) return;
+    }
+    const d = data();
+    d.notes = d.notes.filter(x => x !== n);
+    staleNotes.delete(id);
+    persist();
+    decorateMessage(n.mesId);
+    refreshPanel();
+}
+
+// ---------------------------------------------------------------- modal
+
+function openModal(title, bodyHtml, { wide = false } = {}) {
+    closeModal();
+    const wrap = themed(document.createElement('div'));
+    wrap.id = 'stbs-modal';
+    wrap.innerHTML = `
+        <div class="stbs-modal-box ${wide ? 'wide' : ''}" role="dialog">
+            <div class="stbs-modal-head"><b>${title}</b><div class="stbs-icon-btn fa-solid fa-xmark" data-act="modal-close" title="닫기"></div></div>
+            <div class="stbs-modal-body">${bodyHtml}</div>
+        </div>`;
+    wrap.addEventListener('pointerdown', (e) => { if (e.target === wrap) closeModal(); });
+    wrap.addEventListener('click', (e) => { if (e.target.closest('[data-act="modal-close"]')) closeModal(); });
+    document.body.appendChild(wrap);
+    return wrap.querySelector('.stbs-modal-body');
+}
+
+function closeModal() {
+    $id('stbs-modal')?.remove();
+}
+
+function openMemoEditor({ note = null, pending = null, mesId = null }) {
+    const quote = note ? note.quote : pending ? pending.quote : '';
+    const i = note ? note.mesId : pending ? pending.mesId : mesId;
+    const quoteHtml = quote
+        ? `<blockquote class="stbs-quote">${esc(quote)}</blockquote>`
+        : `<div class="stbs-muted">메시지 전체 · ${esc(speaker(i))}: ${esc(clip(plain(msg(i)?.mes), 80))}</div>`;
+    const body = openModal('독서노트', `
+        ${quoteHtml}
+        <textarea id="stbs-memo-input" class="text_pole stbs-textarea" rows="6" placeholder="이 문장에 대한 생각을 남겨보세요">${esc(note?.memo ?? '')}</textarea>
+        <div class="stbs-row stbs-end">
+            <div class="menu_button" data-act="modal-close">취소</div>
+            <div class="menu_button stbs-primary" id="stbs-memo-save">저장</div>
+        </div>`);
+    const ta = body.querySelector('#stbs-memo-input');
+    setTimeout(() => ta.focus(), 30);
+    body.querySelector('#stbs-memo-save').addEventListener('click', () => {
+        const memo = ta.value.trim();
+        if (note) updateNote(note.id, { memo });
+        else if (pending) createNote({ ...pending, color: pending.color ?? null, memo });
+        else createNote({ mesId: i, memo });
+        closeModal();
+        window.getSelection()?.removeAllRanges();
+        toastr.success('🦊 여우가 노트를 챙겼어요.');
+    });
+}
+
+// ---------------------------------------------------------------- selection popup (Ridi style)
+
+let pendingSel = null;
+
+function hideSelPopup() {
+    $id('stbs-sel-pop')?.remove();
+}
+
+function readSelection() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const startNode = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const root = startNode?.closest?.('#chat .mes_text');
+    if (!root) return null;
+    const mesEl = root.closest('.mes');
+    if (!mesEl || mesEl.querySelector('.edit_textarea')) return null;
+    const mesId = Number(mesEl.getAttribute('mesid'));
+    const full = root.textContent;
+    let start = offsetIn(root, range.startContainer, range.startOffset);
+    let end = root.contains(range.endContainer) ? offsetIn(root, range.endContainer, range.endOffset) : full.length;
+    while (start < end && /\s/.test(full[start])) start++;
+    while (end > start && /\s/.test(full[end - 1])) end--;
+    if (end - start < 1) return null;
+    return { mesId, start, end, quote: full.slice(start, end), rect: range.getBoundingClientRect() };
+}
+
+const repositionPopup = debounce(() => {
+    const pop = $id('stbs-sel-pop');
+    if (!pop) return;
+    let rect = null;
+    if (pop.dataset.kind === 'note') rect = document.querySelector(`#chat mark[data-note="${pop.dataset.note}"]`)?.getBoundingClientRect();
+    else rect = readSelection()?.rect;
+    if (!rect || rect.bottom < 0 || rect.top > window.innerHeight) { hideSelPopup(); return; }
+    placePopup(pop, rect);
+}, 60);
+
+function placePopup(pop, rect) {
+    if (!pop.isConnected) document.body.appendChild(pop);
+    const pw = pop.offsetWidth;
+    const ph = pop.offsetHeight;
+    const mobile = window.matchMedia('(pointer: coarse)').matches;
+    let top = mobile ? rect.bottom + 12 : rect.top - ph - 10;
+    if (top < 8) top = rect.bottom + 12;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, rect.top - ph - 10);
+    let left = rect.left + rect.width / 2 - pw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+}
+
+function colorDots(active = null, withNone = false) {
+    const dots = settings().colors.map((c, k) =>
+        `<div class="stbs-dot ${active === k ? 'active' : ''}" data-color="${k}" style="background:${esc(c)}" title="${COLOR_NAMES[k]} 형광펜"></div>`).join('');
+    return dots + (withNone ? `<div class="stbs-dot stbs-dot-none ${active == null ? 'active' : ''}" data-color="none" title="형광펜 없이 (메모만)"></div>` : '');
+}
+
+function showSelPopup(sel) {
+    hideSelPopup();
+    pendingSel = sel;
+    const pop = themed(document.createElement('div'));
+    pop.id = 'stbs-sel-pop';
+    pop.dataset.kind = 'sel';
+    pop.innerHTML = `
+        ${colorDots()}
+        <span class="stbs-sep"></span>
+        <div class="stbs-pop-btn" data-pop="memo" title="형광펜 없이 메모만"><i class="fa-solid fa-note-sticky"></i><span>메모</span></div>
+        <div class="stbs-pop-btn" data-pop="card" title="명대사 카드"><i class="fa-solid fa-quote-left"></i><span>카드</span></div>
+        <div class="stbs-pop-btn" data-pop="copy" title="복사"><i class="fa-solid fa-copy"></i><span>복사</span></div>`;
+    bindPopup(pop, (act, color) => {
+        const p = pendingSel;
+        if (!p) return;
+        const base = { mesId: p.mesId, start: p.start, end: p.end, quote: p.quote };
+        if (act === 'color') {
+            const n = createNote({ ...base, color });
+            window.getSelection()?.removeAllRanges();
+            hideSelPopup();
+            const mark = document.querySelector(`mark[data-note="${n.id}"]`);
+            if (mark) showNotePopup(n.id, mark.getBoundingClientRect());
+        } else if (act === 'memo') {
+            hideSelPopup();
+            openMemoEditor({ pending: base });
+        } else if (act === 'card') {
+            hideSelPopup();
+            openCard({ text: p.quote, mesId: p.mesId });
+        } else if (act === 'copy') {
+            navigator.clipboard?.writeText(p.quote).then(() => toastr.success('복사했어요.'));
+            hideSelPopup();
+        }
+    });
+    placePopup(pop, sel.rect);
+}
+
+function showNotePopup(noteId, rect) {
+    hideSelPopup();
+    const n = getNote(noteId);
+    if (!n) return;
+    const pop = themed(document.createElement('div'));
+    pop.id = 'stbs-sel-pop';
+    pop.dataset.kind = 'note';
+    pop.dataset.note = n.id;
+    pop.innerHTML = `
+        ${colorDots(n.color, true)}
+        <span class="stbs-sep"></span>
+        <div class="stbs-pop-btn" data-pop="memo" title="메모"><i class="fa-solid fa-note-sticky"></i><span>${n.memo ? '메모 수정' : '메모'}</span></div>
+        <div class="stbs-pop-btn" data-pop="card" title="명대사 카드"><i class="fa-solid fa-quote-left"></i><span>카드</span></div>
+        <div class="stbs-pop-btn" data-pop="delete" title="삭제"><i class="fa-solid fa-trash-can"></i><span>삭제</span></div>
+        ${n.memo ? `<div class="stbs-pop-memo">${esc(clip(n.memo, 140))}</div>` : ''}`;
+    bindPopup(pop, (act, color) => {
+        if (act === 'color') { updateNote(n.id, { color }); hideSelPopup(); }
+        else if (act === 'memo') { hideSelPopup(); openMemoEditor({ note: n }); }
+        else if (act === 'card') { hideSelPopup(); openCard({ text: n.quote, mesId: n.mesId }); }
+        else if (act === 'delete') { hideSelPopup(); deleteNote(n.id); }
+    });
+    placePopup(pop, rect);
+}
+
+function bindPopup(pop, handler) {
+    // Keep the text selection alive while tapping buttons.
+    pop.addEventListener('pointerdown', e => e.preventDefault());
+    pop.addEventListener('mousedown', e => e.preventDefault());
+    pop.addEventListener('click', (e) => {
+        const dot = e.target.closest('[data-color]');
+        if (dot) {
+            const v = dot.dataset.color;
+            handler('color', v === 'none' ? null : Number(v));
+            return;
+        }
+        const b = e.target.closest('[data-pop]');
+        if (b) handler(b.dataset.pop);
+    });
+}
+
+const onSelectionChange = debounce(() => {
+    if (!settings().enabled || !hasChat()) return;
+    const sel = readSelection();
+    if (sel) showSelPopup(sel);
+}, 300);
+
+// ---------------------------------------------------------------- quote card (canvas)
+
+function wrapLines(g, text, maxW) {
+    const lines = [];
+    for (const para of String(text).split(/\n+/)) {
+        const words = para.split(/(\s+)/);
+        let line = '';
+        for (const w of words) {
+            const test = line + w;
+            if (g.measureText(test).width <= maxW || !line.trim()) {
+                if (g.measureText(test).width > maxW) {
+                    // very long word: break by characters
+                    for (const ch of w) {
+                        if (g.measureText(line + ch).width > maxW && line) { lines.push(line); line = ch; } else line += ch;
+                    }
+                } else line = test;
+            } else {
+                lines.push(line.trimEnd());
+                line = w.trimStart();
+            }
+        }
+        if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+}
+
+function drawCard(canvas, { text, who, chapter, source }, themeKey) {
+    const t = CARD_THEMES[themeKey] || CARD_THEMES.paper;
+    const W = 1080, H = 1350, PAD = 110;
+    canvas.width = W;
+    canvas.height = H;
+    const g = canvas.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, W, H);
+    grad.addColorStop(0, t.bg[0]);
+    grad.addColorStop(1, t.bg[1]);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, W, H);
+
+    g.strokeStyle = t.accent;
+    g.globalAlpha = 0.5;
+    g.lineWidth = 3;
+    g.strokeRect(48, 48, W - 96, H - 96);
+    g.globalAlpha = 1;
+
+    const serif = '"Gowun Batang", "Noto Serif KR", "Nanum Myeongjo", "Batang", serif';
+    g.fillStyle = t.accent;
+    g.font = `bold 200px ${serif}`;
+    g.textBaseline = 'top';
+    g.fillText('“', PAD - 20, 90);
+
+    const maxW = W - PAD * 2;
+    const areaTop = 330, areaBottom = H - 300;
+    let size = 64, lines, lh;
+    for (; size >= 28; size -= 2) {
+        g.font = `${size}px ${serif}`;
+        lines = wrapLines(g, text, maxW);
+        lh = size * 1.6;
+        if (lines.length * lh <= areaBottom - areaTop) break;
+    }
+    const maxLines = Math.floor((areaBottom - areaTop) / lh);
+    if (lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] = lines[maxLines - 1].replace(/.?$/, '…'); }
+    g.fillStyle = t.fg;
+    g.textBaseline = 'alphabetic';
+    const blockH = lines.length * lh;
+    let y = areaTop + (areaBottom - areaTop - blockH) / 2 + size;
+    for (const l of lines) { g.fillText(l, PAD, y); y += lh; }
+
+    g.fillStyle = t.accent;
+    g.fillRect(PAD, H - 250, 70, 4);
+    g.fillStyle = t.fg;
+    g.font = `bold 40px ${serif}`;
+    if (who) g.fillText(`— ${who}`, PAD, H - 180);
+    g.fillStyle = t.sub;
+    g.font = `28px ${serif}`;
+    const foot = [chapter, source].filter(Boolean).join('  ·  ');
+    if (foot) g.fillText(clip(foot, 40), PAD, H - 128);
+    if (settings().cardFox && foxImage?.complete && foxImage.naturalWidth) {
+        const cx = W - PAD - 70, cy = H - 170;
+        g.fillStyle = '#fff5e8';
+        g.beginPath(); g.arc(cx, cy, 82, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = t.accent === '#fff5e8' ? '#d9622b' : t.accent;
+        g.lineWidth = 5; g.stroke();
+        g.globalAlpha = 0.97;
+        g.drawImage(foxImage, cx - 64, cy - 60, 128, 128);
+        g.globalAlpha = 1;
+    }
+}
+
+let foxImage = null;
+function loadFoxImage() {
+    if (foxImage) return Promise.resolve(foxImage);
+    return new Promise((res) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => res(img);
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(FOX_SVG.replace('<svg class="stbs-fox"', '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"'));
+        foxImage = img;
+    });
+}
+
+function openCard({ text, mesId }) {
+    const s = settings();
+    const ch = chapterOf(mesId);
+    const info = { text: text || plain(msg(mesId)?.mes), who: speaker(mesId), chapter: sortedChapters().length ? chapterLabel(ch) : '', source: ctx().getCurrentChatId?.() || '' };
+    const themes = Object.entries(CARD_THEMES).map(([k, t]) =>
+        `<div class="stbs-chip ${k === s.cardTheme ? 'active' : ''}" data-theme="${k}"><span class="stbs-swatch" style="background:linear-gradient(135deg,${t.bg[0]},${t.bg[1]})"></span>${t.name}</div>`).join('');
+    const body = openModal('명대사 카드', `
+        <div class="stbs-card-wrap"><canvas id="stbs-card-canvas"></canvas></div>
+        <div class="stbs-row stbs-wrap">${themes}</div>
+        <label class="stbs-label">문장</label>
+        <textarea id="stbs-card-text" class="text_pole stbs-textarea" rows="3">${esc(info.text)}</textarea>
+        <label class="checkbox_label stbs-inline"><input type="checkbox" id="stbs-card-fox" ${s.cardFox ? 'checked' : ''}> <span>여우 도장 찍기</span></label>
+        <div class="stbs-row">
+            <input id="stbs-card-who" class="text_pole" placeholder="화자" value="${esc(info.who)}">
+            <input id="stbs-card-ch" class="text_pole" placeholder="챕터/출처" value="${esc(info.chapter)}">
+        </div>
+        <div class="stbs-row stbs-end">
+            <div class="menu_button" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
+            <div class="menu_button stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG 저장</div>
+        </div>`, { wide: true });
+    const canvas = body.querySelector('#stbs-card-canvas');
+    let theme = s.cardTheme;
+    const redraw = () => drawCard(canvas, {
+        text: body.querySelector('#stbs-card-text').value,
+        who: body.querySelector('#stbs-card-who').value.trim(),
+        chapter: body.querySelector('#stbs-card-ch').value.trim(),
+        source: '',
+    }, theme);
+    const redrawSoon = debounce(redraw, 150);
+    body.addEventListener('input', redrawSoon);
+    body.querySelector('#stbs-card-fox').addEventListener('change', (e) => { s.cardFox = e.target.checked; saveSettings(); redraw(); });
+    body.addEventListener('click', (e) => {
+        const chip = e.target.closest('[data-theme]');
+        if (chip) {
+            theme = chip.dataset.theme;
+            s.cardTheme = theme;
+            saveSettings();
+            body.querySelectorAll('[data-theme]').forEach(x => x.classList.toggle('active', x === chip));
+            redraw();
+        }
+    });
+    body.querySelector('#stbs-card-save').addEventListener('click', () => {
+        canvas.toBlob(b => b && download(`명대사_${fmtDate(Date.now())}_${uid().slice(-4)}.png`, b), 'image/png');
+    });
+    body.querySelector('#stbs-card-copy').addEventListener('click', () => {
+        canvas.toBlob(async (b) => {
+            try {
+                await navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]);
+                toastr.success('이미지를 복사했어요.');
+            } catch {
+                toastr.warning('이 브라우저에서는 이미지 복사가 안 돼요. PNG 저장을 써주세요.');
+            }
+        }, 'image/png');
+    });
+    Promise.all([
+        loadFoxImage(),
+        document.fonts?.load?.('40px "Gowun Batang"').catch(() => { }),
+    ]).then(redraw);
+    redraw();
+}
+
+// ---------------------------------------------------------------- panel
+
+const TABS = [
+    ['toc', 'fa-list-ol', '목차'],
+    ['bookmarks', 'fa-book-bookmark', '책갈피'],
+    ['notes', 'fa-highlighter', '독서노트'],
+    ['search', 'fa-magnifying-glass', '검색'],
+    ['stats', 'fa-chart-simple', '통계'],
+];
+
+const ui = {
+    tab: 'notes',
+    noteFilter: 'all',
+    noteSort: 'story',
+    q: '',
+    scope: 'all',
+    chapterScope: 'all',
+};
+
+function panelOpen() {
+    return $id('stbs-panel')?.classList.contains('open');
+}
+
+function isMobile() {
+    return window.matchMedia('(max-width: 800px)').matches;
+}
+
+function themed(el) {
+    el.dataset.stbsTheme = resolvedTheme();
+    return el;
+}
+
+function applyThemeEverywhere() {
+    for (const id of ['stbs-panel', 'stbs-modal', 'stbs-sel-pop']) {
+        const el = $id(id);
+        if (el) themed(el);
+    }
+}
+
+function buildPanel() {
+    if ($id('stbs-panel')) return;
+    const p = themed(document.createElement('div'));
+    p.id = 'stbs-panel';
+    p.innerHTML = `
+        <div class="stbs-grab" data-drag="sheet"><span></span></div>
+        <div class="stbs-head" data-drag="move">
+            <div class="stbs-title"><span class="stbs-avatar">${FOX_SVG}</span><div class="stbs-title-text"><b>${APP_NAME}</b><span class="stbs-sub" id="stbs-chatname"></span></div></div>
+            <div class="stbs-icon-btn fa-solid fa-file-export" data-act="export" title="내보내기 / 불러오기"></div>
+            <div class="stbs-icon-btn fa-solid fa-xmark" data-act="close" title="닫기"></div>
+        </div>
+        <div class="stbs-tabs">${TABS.map(([k, ic, name]) => `<div class="stbs-tab" data-tab="${k}"><i class="fa-solid ${ic}"></i><span>${name}</span></div>`).join('')}</div>
+        <div class="stbs-body" id="stbs-body"></div>
+        <div class="stbs-resize" data-drag="resize" title="크기 조절"></div>`;
+    document.body.appendChild(p);
+    p.addEventListener('click', onPanelClick);
+    p.addEventListener('input', onPanelInput);
+    p.addEventListener('change', onPanelInput);
+    p.addEventListener('pointerdown', onPanelPointerDown);
+    p.querySelector('.stbs-head').addEventListener('dblclick', (e) => {
+        if (e.target.closest('[data-act]') || isMobile()) return;
+        settings().panel = null;
+        saveSettings();
+        applyGeometry();
+    });
+}
+
+/** Desktop: floating window at saved x/y/w/h. Mobile: bottom sheet with saved height. */
+function applyGeometry() {
+    const p = $id('stbs-panel');
+    if (!p) return;
+    const s = settings();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (isMobile()) {
+        p.classList.add('sheet');
+        p.classList.remove('float');
+        const h = Math.round(Math.min(0.95, Math.max(0.3, s.sheetH || 0.62)) * vh);
+        Object.assign(p.style, { left: '0px', top: 'auto', right: '0px', bottom: '0px', width: '100%', height: `${h}px` });
+        return;
+    }
+    p.classList.add('float');
+    p.classList.remove('sheet');
+    const g = s.panel || { w: 400, h: Math.min(720, vh - 90), x: vw - 400 - 20, y: 60 };
+    const w = Math.min(Math.max(300, g.w), vw - 16);
+    const h = Math.min(Math.max(320, g.h), vh - 16);
+    const x = Math.min(Math.max(8 - w + 120, g.x), vw - 120);
+    const y = Math.min(Math.max(0, g.y), vh - 48);
+    Object.assign(p.style, { left: `${x}px`, top: `${y}px`, right: 'auto', bottom: 'auto', width: `${w}px`, height: `${h}px` });
+}
+
+function onPanelPointerDown(e) {
+    const handle = e.target.closest('[data-drag]');
+    if (!handle || e.target.closest('[data-act]') || e.button > 0) return;
+    const p = $id('stbs-panel');
+    const mode = handle.dataset.drag;
+    const mobile = isMobile();
+    if (mobile && mode === 'resize') return;
+    if (!mobile && mode === 'sheet') return;
+    e.preventDefault();
+    const rect = p.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    p.classList.add('dragging');
+    handle.setPointerCapture?.(e.pointerId);
+
+    const move = (ev) => {
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        if (mobile) {
+            const h = Math.min(window.innerHeight * 0.95, Math.max(80, rect.height - dy));
+            p.style.height = `${h}px`;
+        } else if (mode === 'move') {
+            p.style.left = `${Math.min(Math.max(8 - rect.width + 120, rect.left + dx), window.innerWidth - 120)}px`;
+            p.style.top = `${Math.min(Math.max(0, rect.top + dy), window.innerHeight - 48)}px`;
+        } else {
+            p.style.width = `${Math.min(Math.max(300, rect.width + dx), window.innerWidth - rect.left - 8)}px`;
+            p.style.height = `${Math.min(Math.max(320, rect.height + dy), window.innerHeight - rect.top - 8)}px`;
+        }
+    };
+    const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        p.classList.remove('dragging');
+        const r = p.getBoundingClientRect();
+        const s = settings();
+        if (mobile) {
+            const frac = r.height / window.innerHeight;
+            if (frac < 0.25) { closePanel(); applyGeometry(); return; }
+            s.sheetH = Math.min(0.95, Math.max(0.3, frac));
+        } else {
+            s.panel = { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+        }
+        saveSettings();
+        applyGeometry();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+}
+
+function openPanel(tab) {
+    if (!settings().enabled) { toastr.info(`${APP_NAME} 확장이 꺼져 있어요. 확장 설정에서 켜주세요.`); return; }
+    buildPanel();
+    if (tab && TABS.some(t => t[0] === tab)) ui.tab = tab;
+    const p = $id('stbs-panel');
+    applyGeometry();
+    if (!p.classList.contains('open')) {
+        p.classList.add('anim');
+        p.addEventListener('animationend', () => p.classList.remove('anim'), { once: true });
+    }
+    p.classList.add('open');
+    document.body.classList.add('stbs-panel-open');
+    renderPanel();
+}
+
+function closePanel() {
+    $id('stbs-panel')?.classList.remove('open');
+    document.body.classList.remove('stbs-panel-open');
+}
+
+function togglePanel(tab) {
+    if (panelOpen() && (!tab || tab === ui.tab)) closePanel(); else openPanel(tab);
+}
+
+window.addEventListener('resize', debounce(applyGeometry, 120));
+
+function refreshPanel() {
+    if (panelOpen()) renderPanel();
+}
+
+function renderPanel() {
+    const body = $id('stbs-body');
+    if (!body) return;
+    document.querySelectorAll('#stbs-panel .stbs-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === ui.tab));
+    $id('stbs-chatname').textContent = hasChat() ? clip(ctx().getCurrentChatId(), 40) : '오늘의 책을 펼쳐 주세요';
+    if (!hasChat()) { body.innerHTML = emptyState('아직 펼친 책이 없어요', '채팅을 열면 여우가 함께 읽기 시작해요.'); return; }
+    const scroll = body.scrollTop;
+    const keepFocus = document.activeElement?.id === 'stbs-q';
+    body.innerHTML = ({ toc: renderToc, bookmarks: renderBookmarks, notes: renderNotes, search: renderSearch, stats: renderStats }[ui.tab])();
+    body.scrollTop = scroll;
+    if (ui.tab === 'search') {
+        const q = $id('stbs-q');
+        if (keepFocus || !ui.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+    }
+}
+
+function metaLine(i, extra = '') {
+    return `<div class="stbs-meta">${esc(speaker(i))} · #${i}${extra ? ' · ' + extra : ''}</div>`;
+}
+
+function groupByChapter(items, render) {
+    const chapters = sortedChapters();
+    let html = '';
+    let last = null;
+    for (const it of items) {
+        const ch = chapterOf(it.mesId, chapters);
+        if (chapters.length && ch.id !== last) {
+            html += `<div class="stbs-group-head">${esc(chapterLabel(ch))}</div>`;
+            last = ch.id;
+        }
+        html += render(it);
+    }
+    return html;
+}
+
+function renderToc() {
+    const chat = ctx().chat;
+    const chapters = sortedChapters();
+    const d = data();
+    const cpp = Math.max(100, Number(settings().charsPerPage) || 600);
+    const entries = [];
+    if (!chapters.length || chapters[0].mesId > 0) entries.push({ id: '__prologue', title: chapters.length ? '프롤로그' : '처음부터', mesId: 0, num: 0 });
+    chapters.forEach((c, k) => entries.push({ ...c, num: k + 1 }));
+    let html = `
+        <div class="stbs-hint">메시지 <i class="fa-solid fa-ellipsis"></i> 메뉴의 <i class="fa-solid fa-book-open"></i> 버튼으로 원하는 위치에서 챕터를 시작할 수 있어요.</div>
+        <div class="menu_button stbs-wide-btn stbs-ghost" data-act="chapter-last"><i class="fa-solid fa-plus"></i> 마지막 메시지에서 새 챕터</div>`;
+    entries.forEach((e, k) => {
+        const endId = (entries[k + 1]?.mesId ?? chat.length) - 1;
+        let chars = 0;
+        for (let j = e.mesId; j <= endId; j++) chars += plain(chat[j]?.mes).length;
+        const bm = d.bookmarks.filter(b => b.mesId >= e.mesId && b.mesId <= endId).length;
+        const nt = d.notes.filter(n => n.mesId >= e.mesId && n.mesId <= endId).length;
+        const isReal = e.id !== '__prologue';
+        html += `
+        <div class="stbs-item stbs-toc" data-jump="${e.mesId}">
+            <div class="stbs-toc-num">${e.num || '–'}</div>
+            <div class="stbs-grow">
+                <div class="stbs-item-title">${esc(e.title)}</div>
+                <div class="stbs-meta">#${e.mesId}–#${Math.max(e.mesId, endId)} · 약 ${Math.max(1, Math.round(chars / cpp))}쪽${bm ? ` · 책갈피 ${bm}` : ''}${nt ? ` · 노트 ${nt}` : ''}</div>
+            </div>
+            ${isReal ? `<div class="stbs-actions">
+                <div class="stbs-icon-btn fa-solid fa-pen" data-act="chapter-rename" data-id="${e.id}" title="이름 바꾸기"></div>
+                <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="chapter-del" data-id="${e.id}" title="삭제"></div>
+            </div>` : ''}
+        </div>`;
+    });
+    return html;
+}
+
+function renderBookmarks() {
+    const list = [...data().bookmarks].sort((a, b) => a.mesId - b.mesId);
+    if (!list.length) return emptyState('아직 꽂아 둔 책갈피가 없어요', '메시지 <i class="fa-solid fa-ellipsis"></i> 메뉴의 <i class="fa-solid fa-book-bookmark"></i> 버튼으로 꽂을 수 있어요.');
+    return `<div class="stbs-count">책갈피 ${list.length}개</div>` + groupByChapter(list, b => {
+        const text = plain(msg(b.mesId)?.mes);
+        return `
+        <div class="stbs-item stbs-bm-item" data-jump="${b.mesId}">
+            <i class="fa-solid fa-bookmark stbs-bm-ico"></i>
+            <div class="stbs-grow">
+                <div class="stbs-item-title">${esc(b.label || clip(text, 40))}</div>
+                ${b.label ? `<div class="stbs-snippet">${esc(clip(text, 120))}</div>` : ''}
+                ${metaLine(b.mesId, fmtDate(b.created))}
+            </div>
+            <div class="stbs-actions">
+                <div class="stbs-icon-btn fa-solid fa-pen" data-act="bm-rename" data-id="${b.id}" title="이름 바꾸기"></div>
+                <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="bm-del" data-id="${b.id}" title="삭제"></div>
+            </div>
+        </div>`;
+    });
+}
+
+function renderNotes() {
+    const s = settings();
+    const all = data().notes;
+    const counts = { all: all.length, none: all.filter(n => n.color == null).length, memo: all.filter(n => n.memo).length };
+    s.colors.forEach((_, k) => { counts[k] = all.filter(n => n.color === k).length; });
+    const f = ui.noteFilter;
+    let list = all.filter(n => f === 'all' ? true : f === 'none' ? n.color == null : f === 'memo' ? !!n.memo : n.color === Number(f));
+    list = ui.noteSort === 'story'
+        ? list.sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1))
+        : list.sort((a, b) => b.updated - a.updated);
+
+    const chip = (key, label) => `<div class="stbs-chip ${String(f) === String(key) ? 'active' : ''}" data-act="note-filter" data-f="${key}">${label}</div>`;
+    let html = `
+        <div class="stbs-row stbs-wrap">
+            ${chip('all', `전체 ${counts.all}`)}
+            ${s.colors.map((c, k) => counts[k] ? chip(k, `<span class="stbs-swatch" style="background:${esc(c)}"></span>${counts[k]}`) : '').join('')}
+            ${counts.none ? chip('none', `메모만 ${counts.none}`) : ''}
+            ${counts.memo ? chip('memo', `메모 있는 것 ${counts.memo}`) : ''}
+            <div class="stbs-chip stbs-sort" data-act="note-sort"><i class="fa-solid fa-arrow-down-wide-short"></i> ${ui.noteSort === 'story' ? '이야기 순' : '최근 순'}</div>
+        </div>`;
+    if (!all.length) {
+        return html + emptyState('여우가 맛있는 문장을 기다려요', '채팅에서 문장이나 문단을 드래그해 보세요.<br>형광펜을 칠하거나, 형광펜 없이 메모만 남길 수도 있어요.');
+    }
+    const render = (n) => {
+        const colorCss = n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : '';
+        const stale = staleNotes.has(n.id) ? '<span class="stbs-badge">원문 변경됨</span>' : '';
+        const quote = n.start != null
+            ? `<div class="stbs-note-quote">${esc(n.quote)}</div>`
+            : `<div class="stbs-note-quote stbs-whole"><span class="stbs-badge">메시지 전체</span> ${esc(clip(plain(msg(n.mesId)?.mes), 120))}</div>`;
+        return `
+        <div class="stbs-note ${n.color == null ? 'no-color' : ''}" ${colorCss} data-jump="${n.mesId}" data-note="${n.id}">
+            ${quote}
+            ${n.memo ? `<div class="stbs-note-memo">${esc(n.memo)}</div>` : ''}
+            <div class="stbs-note-foot">
+                <div class="stbs-meta">${esc(speaker(n.mesId))} · #${n.mesId} · ${fmtDate(n.updated)} ${stale}</div>
+                <div class="stbs-actions">
+                    <div class="stbs-icon-btn fa-solid fa-pen" data-act="note-edit" data-id="${n.id}" title="메모 쓰기/수정"></div>
+                    <div class="stbs-icon-btn fa-solid fa-quote-left" data-act="note-card" data-id="${n.id}" title="명대사 카드"></div>
+                    <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="note-del" data-id="${n.id}" title="삭제"></div>
+                </div>
+            </div>
+        </div>`;
+    };
+    if (!list.length) return html + emptyState('조건에 맞는 노트가 없어요', '', false);
+    return html + (ui.noteSort === 'story' ? groupByChapter(list, render) : list.map(render).join(''));
+}
+
+function renderSearch() {
+    const chapters = sortedChapters();
+    let html = `
+        <div class="stbs-search-bar">
+            <i class="fa-solid fa-magnifying-glass stbs-search-ico"></i>
+            <input id="stbs-q" type="search" placeholder="채팅에서 찾기…" value="${esc(ui.q)}" autocomplete="off">
+        </div>
+        <div class="stbs-row">
+            <select id="stbs-scope" class="stbs-sel">
+                <option value="all" ${ui.scope === 'all' ? 'selected' : ''}>모두</option>
+                <option value="user" ${ui.scope === 'user' ? 'selected' : ''}>나</option>
+                <option value="char" ${ui.scope === 'char' ? 'selected' : ''}>캐릭터</option>
+            </select>
+            ${chapters.length ? `<select id="stbs-chscope" class="stbs-sel">
+                <option value="all">모든 챕터</option>
+                ${(chapters[0].mesId > 0 ? [{ id: '__prologue', title: '프롤로그' }] : []).concat(chapters.map((c, k) => ({ id: c.id, title: `${k + 1}장. ${c.title}` })))
+                .map(c => `<option value="${c.id}" ${ui.chapterScope === c.id ? 'selected' : ''}>${esc(c.title)}</option>`).join('')}
+            </select>` : ''}
+        </div>
+        <div id="stbs-results">${searchResults()}</div>`;
+    return html;
+}
+
+function searchResults() {
+    const q = ui.q.trim().toLowerCase();
+    if (!q) return emptyState('무엇을 찾아볼까요?', '여우가 킁킁, 이 채팅 전체에서 찾아줄게요.');
+    const chat = ctx().chat;
+    const chapters = sortedChapters();
+    const LIMIT = 300;
+    const out = [];
+    let total = 0;
+    for (let i = 0; i < chat.length; i++) {
+        const m = chat[i];
+        if (!m || m.is_system) continue;
+        if (ui.scope === 'user' && !m.is_user) continue;
+        if (ui.scope === 'char' && m.is_user) continue;
+        if (ui.chapterScope !== 'all' && chapterOf(i, chapters).id !== ui.chapterScope) continue;
+        const text = plain(m.mes);
+        const lower = text.toLowerCase();
+        const idx = lower.indexOf(q);
+        if (idx === -1) continue;
+        let hits = 0;
+        for (let p = idx; p !== -1; p = lower.indexOf(q, p + q.length)) hits++;
+        total += hits;
+        if (out.length >= LIMIT) continue;
+        const from = Math.max(0, idx - 40);
+        const to = Math.min(text.length, idx + q.length + 60);
+        const pre = (from > 0 ? '…' : '') + text.slice(from, idx);
+        const hit = text.slice(idx, idx + q.length);
+        const post = text.slice(idx + q.length, to) + (to < text.length ? '…' : '');
+        out.push(`
+        <div class="stbs-item stbs-result" data-jump="${i}">
+            <div class="stbs-grow">
+                <div class="stbs-snippet">${esc(pre)}<mark class="stbs-find">${esc(hit)}</mark>${esc(post)}</div>
+                ${metaLine(i, `${chapters.length ? esc(chapterLabel(chapterOf(i, chapters))) : ''}${hits > 1 ? ` · ${hits}번` : ''}`)}
+            </div>
+        </div>`);
+    }
+    if (!out.length) return emptyState(`"${esc(ui.q)}" 결과가 없어요`, '다른 단어로 찾아볼까요?', false);
+    return `<div class="stbs-count">메시지 ${out.length}${out.length >= LIMIT ? '+' : ''}개 · ${total}번 등장${out.length >= LIMIT ? ` <span class="stbs-dim">(처음 ${LIMIT}개만 표시)</span>` : ''}</div>` + out.join('');
+}
+
+function computeStats() {
+    const chat = ctx().chat;
+    const s = settings();
+    const cpp = Math.max(100, Number(s.charsPerPage) || 600);
+    const bySpeaker = new Map();
+    const words = new Map();
+    let chars = 0, count = 0, userChars = 0, longest = { i: -1, len: 0 };
+    let first = null, last = null;
+    chat.forEach((m, i) => {
+        if (!m || m.is_system) return;
+        const text = plain(m.mes);
+        const len = text.length;
+        count++;
+        chars += len;
+        if (m.is_user) userChars += len;
+        const name = speaker(i) || (m.is_user ? '나' : '캐릭터');
+        const sp = bySpeaker.get(name) || { name, chars: 0, msgs: 0, user: !!m.is_user };
+        sp.chars += len; sp.msgs++;
+        bySpeaker.set(name, sp);
+        if (len > longest.len) longest = { i, len };
+        const t = Date.parse(m.send_date);
+        if (!isNaN(t)) { if (first === null || t < first) first = t; if (last === null || t > last) last = t; }
+        for (const w of text.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || []) {
+            if (STOPWORDS.has(w) || /^\d+$/.test(w)) continue;
+            words.set(w, (words.get(w) || 0) + 1);
+        }
+    });
+    const topWords = [...words.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+    const chapters = sortedChapters();
+    const chapterBars = [];
+    if (chapters.length) {
+        const entries = (chapters[0].mesId > 0 ? [{ title: '프롤로그', mesId: 0 }] : []).concat(chapters.map((c, k) => ({ title: `${k + 1}장. ${c.title}`, mesId: c.mesId })));
+        entries.forEach((e, k) => {
+            const end = entries[k + 1]?.mesId ?? chat.length;
+            let c = 0;
+            for (let j = e.mesId; j < end; j++) if (chat[j] && !chat[j].is_system) c += plain(chat[j].mes).length;
+            chapterBars.push({ title: e.title, pages: c / cpp, mesId: e.mesId });
+        });
+    }
+    return { count, chars, pages: chars / cpp, userChars, speakers: [...bySpeaker.values()].sort((a, b) => b.chars - a.chars), topWords, chapterBars, longest, first, last };
+}
+
+function renderStats() {
+    const st = computeStats();
+    const d = data();
+    const hl = d.notes.filter(n => n.color != null).length;
+    const fmt = (n) => Math.round(n).toLocaleString();
+    const days = st.first && st.last ? Math.max(1, Math.round((st.last - st.first) / 86400000) + 1) : null;
+    const tile = (v, l) => `<div class="stbs-tile"><b>${v}</b><span>${l}</span></div>`;
+    const userPct = st.chars ? Math.round(st.userChars / st.chars * 100) : 0;
+    const maxSp = st.speakers[0]?.chars || 1;
+    const maxPg = Math.max(...st.chapterBars.map(c => c.pages), 0.01);
+    let html = `
+        <div class="stbs-hero">
+            <div class="stbs-hero-text">
+                <span class="stbs-eyebrow">여우가 냠냠 먹어치운 분량</span>
+                <div class="stbs-book-pages">${fmt(Math.max(1, st.pages))}<span class="stbs-unit">쪽</span></div>
+                <span class="stbs-meta">1쪽 = ${settings().charsPerPage}자 기준</span>
+            </div>
+            <span class="stbs-avatar lg">${FOX_SVG}</span>
+        </div>
+        <div class="stbs-tiles">
+            ${tile(fmt(st.count), '메시지')}
+            ${tile(fmt(st.chars), '글자')}
+            ${tile(days ? `${days}일` : '–', '함께한 기간')}
+            ${tile(d.chapters.length, '챕터')}
+            ${tile(d.bookmarks.length, '책갈피')}
+            ${tile(`${hl}<span class="stbs-dim"> / ${d.notes.length - hl}</span>`, '형광펜 / 메모')}
+        </div>
+        <div class="stbs-section">대사 비율</div>
+        <div class="stbs-ratio"><div style="width:${userPct}%"></div></div>
+        <div class="stbs-row stbs-between stbs-meta"><span>나 ${userPct}%</span><span>캐릭터 ${100 - userPct}%</span></div>`;
+    if (st.speakers.length > 2 || st.speakers.length && !st.speakers.some(s => s.user)) {
+        html += `<div class="stbs-section">화자별 분량</div>` + st.speakers.slice(0, 8).map(sp => `
+            <div class="stbs-bar-row"><span class="stbs-bar-label">${esc(clip(sp.name, 12))}</span>
+            <div class="stbs-bar"><div style="width:${sp.chars / maxSp * 100}%"></div></div><span class="stbs-bar-val">${sp.msgs}</span></div>`).join('');
+    }
+    if (st.chapterBars.length) {
+        html += `<div class="stbs-section">챕터별 분량 (쪽)</div>` + st.chapterBars.map(c => `
+            <div class="stbs-bar-row stbs-click" data-jump="${c.mesId}"><span class="stbs-bar-label">${esc(clip(c.title, 12))}</span>
+            <div class="stbs-bar"><div style="width:${c.pages / maxPg * 100}%"></div></div><span class="stbs-bar-val">${c.pages < 1 ? c.pages.toFixed(1) : Math.round(c.pages)}</span></div>`).join('');
+    }
+    if (st.topWords.length) {
+        html += `<div class="stbs-section">자주 나온 단어</div><div class="stbs-row stbs-wrap">` +
+            st.topWords.map(([w, n], k) => `<div class="stbs-chip stbs-word" data-act="search-word" data-w="${esc(w)}"><b>${k + 1}</b> ${esc(w)} <span class="stbs-dim">${n}</span></div>`).join('') + '</div>';
+    }
+    if (st.longest.i >= 0) {
+        html += `<div class="stbs-section">가장 긴 메시지</div>
+            <div class="stbs-item" data-jump="${st.longest.i}"><div class="stbs-grow">
+                <div class="stbs-snippet">${esc(clip(plain(msg(st.longest.i)?.mes), 100))}</div>
+                ${metaLine(st.longest.i, `${fmt(st.longest.len)}자`)}
+            </div></div>`;
+    }
+    return html;
+}
+
+const runSearch = debounce(() => {
+    const r = $id('stbs-results');
+    if (r) r.innerHTML = searchResults();
+}, 250);
+
+function onPanelInput(e) {
+    const t = e.target;
+    if (t.id === 'stbs-q') { ui.q = t.value; runSearch(); }
+    else if (t.id === 'stbs-scope' && e.type === 'change') { ui.scope = t.value; runSearch(); }
+    else if (t.id === 'stbs-chscope' && e.type === 'change') { ui.chapterScope = t.value; runSearch(); }
+}
+
+async function onPanelClick(e) {
+    const tab = e.target.closest('[data-tab]');
+    if (tab) { ui.tab = tab.dataset.tab; renderPanel(); $id('stbs-body').scrollTop = 0; return; }
+    const act = e.target.closest('[data-act]');
+    if (act) {
+        e.stopPropagation();
+        const id = act.dataset.id;
+        const d = data();
+        switch (act.dataset.act) {
+            case 'close': closePanel(); break;
+            case 'export': openExport(); break;
+            case 'chapter-last': {
+                const len = ctx().chat.length;
+                if (len) await addChapter(len - 1);
+                break;
+            }
+            case 'chapter-rename': await renameChapter(id); break;
+            case 'chapter-del': await deleteChapter(id); break;
+            case 'bm-rename': {
+                const b = d.bookmarks.find(x => x.id === id);
+                if (!b) break;
+                const res = await ctx().Popup.show.input('🦊 책갈피 이름', '', b.label || '');
+                if (res === null || res === false || res === undefined) break;
+                b.label = String(res).trim();
+                persist(); refreshPanel();
+                break;
+            }
+            case 'bm-del': {
+                const b = d.bookmarks.find(x => x.id === id);
+                if (b) await toggleBookmark(b.mesId, false);
+                break;
+            }
+            case 'note-filter': ui.noteFilter = act.dataset.f; renderPanel(); break;
+            case 'note-sort': ui.noteSort = ui.noteSort === 'story' ? 'recent' : 'story'; renderPanel(); break;
+            case 'note-edit': { const n = getNote(id); if (n) openMemoEditor({ note: n }); break; }
+            case 'note-card': { const n = getNote(id); if (n) openCard({ text: n.quote || plain(msg(n.mesId)?.mes), mesId: n.mesId }); break; }
+            case 'note-del': await deleteNote(id); break;
+            case 'search-word': ui.q = act.dataset.w; ui.tab = 'search'; renderPanel(); break;
+        }
+        return;
+    }
+    const jump = e.target.closest('[data-jump]');
+    if (jump) jumpTo(Number(jump.dataset.jump), jump.dataset.note || null);
+}
+
+// ---------------------------------------------------------------- export / import
+
+function buildMarkdown() {
+    const c = ctx();
+    const d = data();
+    const chapters = sortedChapters();
+    const st = computeStats();
+    const colors = settings().colors;
+    const lines = [];
+    const title = c.getCurrentChatId();
+    lines.push(`# 📖 ${title}`, '');
+    lines.push(`> ${c.groupId ? '그룹 채팅' : `캐릭터: ${c.name2}`} · 내보낸 날짜: ${fmtDate(Date.now())}`);
+    lines.push(`> 메시지 ${st.count}개 · ${st.chars.toLocaleString()}자 · 약 ${Math.round(st.pages)}쪽 · 책갈피 ${d.bookmarks.length} · 노트 ${d.notes.length}`, '');
+
+    if (chapters.length) {
+        lines.push('## 목차', '');
+        if (chapters[0].mesId > 0) lines.push(`- 프롤로그 (#0)`);
+        chapters.forEach((ch, k) => lines.push(`${k + 1}. ${ch.title} (#${ch.mesId})`));
+        lines.push('');
+    }
+
+    const section = (items, heading, render) => {
+        if (!items.length) return;
+        lines.push(`## ${heading}`, '');
+        let last = null;
+        for (const it of items) {
+            const ch = chapterOf(it.mesId, chapters);
+            if (chapters.length && ch.id !== last) { lines.push(`### ${chapterLabel(ch)}`, ''); last = ch.id; }
+            render(it);
+        }
+    };
+
+    section([...d.bookmarks].sort((a, b) => a.mesId - b.mesId), '🦊 책갈피', (b) => {
+        const text = plain(msg(b.mesId)?.mes);
+        lines.push(`- **${b.label || clip(text, 40)}** — ${speaker(b.mesId)} (#${b.mesId})`);
+        if (b.label) lines.push(`  > ${clip(text, 200)}`);
+    });
+    if (d.bookmarks.length) lines.push('');
+
+    section([...d.notes].sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1)), '🖍️ 독서노트', (n) => {
+        const q = n.start != null ? n.quote : `(메시지 전체) ${clip(plain(msg(n.mesId)?.mes), 200)}`;
+        for (const l of q.split('\n')) lines.push(`> ${l}`);
+        const tag = n.color != null ? `${COLOR_EMOJI[n.color]} ${COLOR_NAMES[n.color]}` : '📝 메모';
+        lines.push('>', `> — ${speaker(n.mesId)} · #${n.mesId} · ${fmtDate(n.updated)} · ${tag}`, '');
+        if (n.memo) { lines.push(...n.memo.split('\n').map(l => `📝 ${l}`), ''); }
+        lines.push('---', '');
+    });
+    void colors;
+    return lines.join('\n');
+}
+
+function openExport() {
+    if (!hasChat()) return;
+    const body = openModal('내보내기 · 불러오기', `
+        <div class="stbs-muted">지금 열린 채팅의 기록만 대상이에요.</div>
+        <div class="menu_button stbs-wide-btn" data-x="md"><i class="fa-solid fa-file-lines"></i> 마크다운(.md)으로 내보내기</div>
+        <div class="stbs-muted">목차, 책갈피, 형광펜, 메모를 읽기 좋게 정리한 문서예요.</div>
+        <div class="menu_button stbs-wide-btn" data-x="json"><i class="fa-solid fa-floppy-disk"></i> 백업 파일(.json) 저장</div>
+        <div class="menu_button stbs-wide-btn" data-x="import"><i class="fa-solid fa-file-import"></i> 백업 불러오기</div>
+        <div class="stbs-muted">불러오면 지금 데이터에 합쳐져요. (같은 항목은 건너뜀)</div>
+        <input type="file" id="stbs-import-file" accept=".json,application/json" hidden>`);
+    const name = safeFileName(ctx().getCurrentChatId());
+    body.addEventListener('click', (e) => {
+        const x = e.target.closest('[data-x]')?.dataset.x;
+        if (x === 'md') download(`${name}_독서노트.md`, new Blob([buildMarkdown()], { type: 'text/markdown;charset=utf-8' }));
+        if (x === 'json') {
+            const payload = { format: 'st-bookshelf', version: 1, chat: ctx().getCurrentChatId(), exportedAt: new Date().toISOString(), data: data() };
+            download(`${name}_책먹는여우백업.json`, new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+        }
+        if (x === 'import') body.querySelector('#stbs-import-file').click();
+    });
+    body.querySelector('#stbs-import-file').addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            const json = JSON.parse(await file.text());
+            if (json?.format !== 'st-bookshelf' || !json.data) throw new Error('format');
+            const d = data();
+            let added = 0;
+            for (const k of ['bookmarks', 'notes', 'chapters']) {
+                const have = new Set(d[k].map(x => x.id));
+                for (const item of json.data[k] || []) {
+                    if (!item || typeof item.mesId !== 'number' || have.has(item.id)) continue;
+                    d[k].push(item);
+                    added++;
+                }
+            }
+            reconcile();
+            persist();
+            decorateAll();
+            refreshPanel();
+            closeModal();
+            toastr.success(`${added}개 항목을 불러왔어요.`);
+        } catch {
+            toastr.error('책 먹는 여우 백업 파일이 아니에요.');
+        }
+    });
+}
+
+// ---------------------------------------------------------------- settings UI
+
+function buildSettingsUI() {
+    if ($id('stbs-settings')) return;
+    const s = settings();
+    const html = `
+    <div id="stbs-settings" class="extension_settings">
+        <div class="inline-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b class="stbs-set-title">${FOX_SVG} ${APP_NAME}</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+            </div>
+            <div class="inline-drawer-content">
+                <label class="checkbox_label"><input type="checkbox" data-set="enabled"> <span>사용하기</span></label>
+                <div class="menu_button stbs-wide-btn" id="stbs-open-from-settings"><i class="fa-solid fa-book-open"></i> 독서 패널 열기</div>
+                <hr>
+                <label class="checkbox_label"><input type="checkbox" data-set="showHighlights"> <span>채팅에 형광펜 보이기</span></label>
+                <label class="checkbox_label"><input type="checkbox" data-set="showMemoUnderline"> <span>메모만 단 문장에 점선 밑줄</span></label>
+                <label class="checkbox_label"><input type="checkbox" data-set="showChapters"> <span>채팅에 챕터 구분선 보이기</span></label>
+                <label class="checkbox_label"><input type="checkbox" data-set="showRibbon"> <span>책갈피 꽂은 메시지에 리본 표시</span></label>
+                <div class="stbs-set-row"><span>패널 테마</span>
+                    <select class="text_pole stbs-select" data-set-theme>${Object.entries(PANEL_THEMES).map(([k, v]) => `<option value="${k}" ${s.theme === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+                </div>
+                <div class="menu_button stbs-wide-btn" id="stbs-reset-pos"><i class="fa-solid fa-arrows-to-dot"></i> 패널 위치·크기 초기화</div>
+                <div class="stbs-set-row"><span>형광펜 색상</span>
+                    ${s.colors.map((c, k) => `<input type="color" data-color-set="${k}" value="${esc(c)}" title="${COLOR_NAMES[k]}">`).join('')}
+                    <div class="menu_button stbs-mini" id="stbs-color-reset" title="기본 색으로">↺</div>
+                </div>
+                <div class="stbs-set-row"><span>1쪽 = </span><input type="number" class="text_pole stbs-num" data-set="charsPerPage" min="100" max="5000" step="50"><span>자</span></div>
+                <div class="stbs-set-note">마법봉 메뉴 → <b>책 먹는 여우</b>로 패널을 열어요. 패널 윗부분을 끌어 옮기고, 오른쪽 아래 모서리로 크기를 바꿔요. 모바일에서는 손잡이를 위아래로 끌어요.<br><code>/bookfox</code> 패널 열기 · <code>/bm</code> 마지막 메시지에 책갈피</div>
+            </div>
+        </div>
+    </div>`;
+    const host = $id('extensions_settings2') || $id('extensions_settings');
+    host?.insertAdjacentHTML('beforeend', html);
+    const root = $id('stbs-settings');
+    if (!root) return;
+    root.querySelectorAll('[data-set]').forEach(inp => {
+        const k = inp.dataset.set;
+        if (inp.type === 'checkbox') inp.checked = !!s[k]; else inp.value = s[k];
+        inp.addEventListener('change', () => {
+            s[k] = inp.type === 'checkbox' ? inp.checked : Math.max(100, Number(inp.value) || DEFAULTS[k]);
+            saveSettings();
+            if (k === 'enabled' && !s.enabled) { closePanel(); hideSelPopup(); }
+            decorateAll();
+            refreshPanel();
+        });
+    });
+    root.querySelectorAll('[data-color-set]').forEach(inp => {
+        inp.addEventListener('input', () => {
+            s.colors[Number(inp.dataset.colorSet)] = inp.value;
+            applyColorVars();
+            saveSettings();
+        });
+    });
+    root.querySelector('#stbs-color-reset').addEventListener('click', () => {
+        s.colors = [...DEFAULTS.colors];
+        root.querySelectorAll('[data-color-set]').forEach((inp, k) => { inp.value = s.colors[k]; });
+        applyColorVars();
+        saveSettings();
+    });
+    root.querySelector('#stbs-open-from-settings').addEventListener('click', () => openPanel());
+    root.querySelector('[data-set-theme]').addEventListener('change', (e) => {
+        s.theme = e.target.value;
+        saveSettings();
+        applyThemeEverywhere();
+    });
+    root.querySelector('#stbs-reset-pos').addEventListener('click', () => {
+        s.panel = null; s.sheetH = DEFAULTS.sheetH;
+        saveSettings();
+        applyGeometry();
+        toastr.success('위치를 처음대로 돌렸어요.');
+    });
+}
+
+function buildWandItem() {
+    const menu = $id('extensionsMenu');
+    if (!menu || $id('stbs-wand')) return;
+    const item = document.createElement('div');
+    item.id = 'stbs-wand';
+    item.className = 'list-group-item flex-container flexGap5 interactable';
+    item.tabIndex = 0;
+    item.innerHTML = `<div class="extensionsMenuExtensionButton stbs-wand-fox">${FOX_SVG}</div><span>${APP_NAME}</span>`;
+    item.addEventListener('click', () => openPanel());
+    menu.appendChild(item);
+}
+
+// ---------------------------------------------------------------- slash commands
+
+function registerCommands() {
+    const { SlashCommandParser, SlashCommand, SlashCommandArgument, ARGUMENT_TYPE } = ctx();
+    if (!SlashCommandParser || !SlashCommand) return;
+    try {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'bookfox',
+            aliases: ['bookshelf'],
+            callback: (_args, value) => { openPanel(String(value ?? '').trim() || undefined); return ''; },
+            returns: 'nothing',
+            unnamedArgumentList: [SlashCommandArgument.fromProps({
+                description: 'tab: toc | bookmarks | notes | search | stats',
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: false,
+                enumList: TABS.map(t => t[0]),
+            })],
+            helpString: '<div>책 먹는 여우 독서 패널을 엽니다. 예: <code>/bookfox notes</code></div>',
+        }));
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'bm',
+            callback: async (_args, value) => {
+                const len = ctx().chat?.length ?? 0;
+                if (!len) return '';
+                const i = len - 1;
+                if (bookmarkAt(i)) { await toggleBookmark(i, false); return ''; }
+                data().bookmarks.push({ id: uid(), mesId: i, label: String(value ?? '').trim(), created: Date.now(), sig: sigAt(i) });
+                persist(); decorateMessage(i); refreshPanel();
+                toastr.success('🦊 책갈피를 꽂았어요.');
+                return '';
+            },
+            returns: 'nothing',
+            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '책갈피 이름 (선택)', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
+            helpString: '<div>마지막 메시지에 책갈피를 꽂습니다(다시 쓰면 뺍니다). 예: <code>/bm 고백 장면</code></div>',
+        }));
+    } catch (err) {
+        console.warn('[BookFox] slash command registration failed', err);
+    }
+}
+
+// ---------------------------------------------------------------- wiring
+
+function onChatChanged() {
+    hideSelPopup();
+    closeModal();
+    staleNotes.clear();
+    ui.q = ''; ui.chapterScope = 'all'; ui.noteFilter = 'all';
+    reconcile();
+    setTimeout(decorateAll, 50);
+    refreshPanel();
+}
+
+function bindGlobal() {
+    const { eventSource, event_types: E } = ctx();
+    eventSource.on(E.CHAT_CHANGED, onChatChanged);
+    const one = (id) => { const i = Number(id); if (!isNaN(i)) { decorateMessage(i); if (data().chapters.some(c => c.mesId === i)) decorateChapters(); } };
+    eventSource.on(E.CHARACTER_MESSAGE_RENDERED, one);
+    eventSource.on(E.USER_MESSAGE_RENDERED, one);
+    if (E.MESSAGE_UPDATED) eventSource.on(E.MESSAGE_UPDATED, one);
+    eventSource.on(E.MESSAGE_SWIPED, (id) => setTimeout(() => one(id), 0));
+    eventSource.on(E.MESSAGE_EDITED, (id) => {
+        const i = Number(id);
+        if (!hasChat() || isNaN(i)) return;
+        const d = data();
+        const sig = sigAt(i);
+        for (const item of [...d.bookmarks, ...d.chapters, ...d.notes]) if (item.mesId === i) item.sig = sig;
+        persist();
+        refreshPanel();
+    });
+    eventSource.on(E.MESSAGE_DELETED, () => { reconcile(); setTimeout(decorateAll, 30); refreshPanel(); });
+    if (E.MORE_MESSAGES_LOADED) eventSource.on(E.MORE_MESSAGES_LOADED, () => decorateAll());
+
+    // message buttons (delegated)
+    $(document).on('click', '.stbs-mes-btn', function (e) {
+        e.stopPropagation();
+        if (!settings().enabled) { toastr.info(`${APP_NAME} 확장이 꺼져 있어요.`); return; }
+        const i = Number($(this).closest('.mes').attr('mesid'));
+        if (isNaN(i)) return;
+        const act = this.dataset.stbs;
+        if (act === 'bookmark') toggleBookmark(i);
+        else if (act === 'chapter') addChapter(i);
+        else if (act === 'memo') openMemoEditor({ mesId: i });
+        else if (act === 'card') openCard({ text: plain(msg(i)?.mes), mesId: i });
+    });
+
+    // chapter divider click -> TOC
+    $(document).on('click', '#chat .stbs-chapter-div', () => openPanel('toc'));
+
+    // highlight click -> note popup
+    $(document).on('click', '#chat mark.stbs-hl', function (e) {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return;
+        e.stopPropagation();
+        showNotePopup(this.dataset.note, this.getBoundingClientRect());
+    });
+
+    document.addEventListener('selectionchange', onSelectionChange);
+    document.addEventListener('pointerdown', (e) => {
+        if (!e.target.closest?.('#stbs-sel-pop')) hideSelPopup();
+    }, true);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { hideSelPopup(); if ($id('stbs-modal')) closeModal(); }
+    });
+    $id('chat')?.addEventListener('scroll', repositionPopup, { passive: true });
+}
+
+function injectTemplateButtons() {
+    const tpl = document.querySelector('#message_template .mes');
+    if (tpl) ensureMesButtons(tpl);
+    document.querySelectorAll('#chat .mes').forEach(ensureMesButtons);
+}
+
+(function init() {
+    const s0 = settings();
+    if (!s0.v12) { s0.theme = 'auto'; s0.cardTheme = s0.cardTheme === 'paper' ? 'fox' : s0.cardTheme; s0.v12 = true; delete s0.showFab; delete s0.showSendButton; delete s0.fab; saveSettings(); }
+    applyColorVars();
+    injectTemplateButtons();
+    bindGlobal();
+    registerCommands();
+    const { eventSource, event_types } = ctx();
+    eventSource.on(event_types.APP_READY, () => {
+        buildSettingsUI();
+        buildWandItem();
+        $id('stbs-send-btn')?.remove();
+        $id('stbs-fab')?.remove();
+        injectTemplateButtons();
+        reconcile();
+        decorateAll();
+    });
+    console.log('[BookFox] loaded');
+})();
