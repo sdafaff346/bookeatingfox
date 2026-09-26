@@ -492,12 +492,38 @@ function openModal(title, bodyHtml, { wide = false } = {}) {
         </div>`;
     wrap.addEventListener('pointerdown', (e) => { if (e.target === wrap) closeModal(); });
     wrap.addEventListener('click', (e) => { if (e.target.closest('[data-act="modal-close"]')) closeModal(); });
-    overlayHost().appendChild(wrap);
+    // Show inside its own modal <dialog> (browser top layer) so theme popovers — e.g. Blue Lemonade's
+    // message ⋯ menu, which is itself a top-layer popover — can never cover it.
+    const host = document.createElement('dialog');
+    host.id = 'stbs-modal-host';
+    themed(host);
+    host.appendChild(wrap);
+    host.addEventListener('cancel', (e) => { e.preventDefault(); closeModal(); });
+    document.body.appendChild(host);
+    try { host.showModal(); } catch { host.setAttribute('open', ''); }
+    const tc = $id('toast-container');
+    if (tc) host.appendChild(tc);
     return wrap.querySelector('.stbs-modal-body');
 }
 
 function closeModal() {
+    const host = $id('stbs-modal-host');
+    const tc = $id('toast-container');
+    if (tc && host?.contains(tc)) (($id('stbs-dialog')?.open && $id('stbs-dialog')) || document.body).appendChild(tc);
+    if (host) { try { host.close(); } catch { /* not open */ } host.remove(); }
     $id('stbs-modal')?.remove();
+}
+
+/** Close the message ⋯ menu our button lives in (SillyTavern keeps it open; some themes turn it into a top-layer popover). */
+function closeMesMenu(btn) {
+    const menu = btn.closest('.extraMesButtons');
+    if (!menu || document.body.classList.contains('expandMessageActions')) return;
+    try { if (menu.matches(':popover-open')) menu.hidePopover(); } catch { /* no popover API */ }
+    menu.classList.remove('visible');
+    menu.style.display = 'none';
+    menu.style.opacity = '';
+    const hint = menu.parentElement?.querySelector(':scope > .extraMesButtonsHint');
+    if (hint) { hint.style.display = ''; hint.style.opacity = ''; }
 }
 
 function openMemoEditor({ note = null, pending = null, mesId = null }) {
@@ -1710,6 +1736,7 @@ function bindGlobal() {
         const i = Number($(this).closest('.mes').attr('mesid'));
         if (isNaN(i)) return;
         const act = this.dataset.stbs;
+        closeMesMenu(this);
         if (act === 'bookmark') toggleBookmark(i);
         else if (act === 'chapter') addChapter(i);
         else if (act === 'memo') openMemoEditor({ mesId: i });

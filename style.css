@@ -781,3 +781,21 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent);
 #stbs-panel.page .stbs-x { display: none; }
 #stbs-dialog #stbs-modal { z-index: 5000; }
 #stbs-panel.page { z-index: 1; }
+
+/* modal host dialog (top layer) */
+#stbs-modal-host {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
+    background: transparent;
+    overflow: hidden;
+}
+#stbs-modal-host::backdrop { background: transparent; }
