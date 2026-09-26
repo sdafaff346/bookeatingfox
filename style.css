@@ -120,22 +120,26 @@
     vertical-align: super;
 }
 
-#chat .mes.stbs-bm { position: relative; }
-#chat .mes.stbs-bm::after {
+/* Bookmark ribbon sits right after the speaker's name, so it never covers message buttons
+   (themes like Blue Lemonade put their own buttons in the top-right corner). */
+#chat .mes.stbs-bm .name_text::after {
     content: "";
-    position: absolute;
-    top: 0;
-    right: 16px;
-    width: 10px;
-    height: 20px;
+    display: inline-block;
+    width: 9px;
+    height: 14px;
+    margin-left: 7px;
+    vertical-align: -1px;
     background: var(--stbs-fox);
     clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
-    pointer-events: none;
-    opacity: .92;
 }
 
 #chat .stbs-chapter-div {
     display: flex;
+    width: calc(100% - 24px);
+    box-sizing: border-box;
+    align-self: stretch;
+    flex: none;
+    min-width: 0;
     align-items: center;
     gap: 14px;
     margin: 26px 12px 12px;

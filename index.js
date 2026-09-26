@@ -575,6 +575,35 @@ function placePopup(pop, rect) {
     left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
     pop.style.top = `${top}px`;
     pop.style.left = `${left}px`;
+    avoidOtherPopups(pop);
+    // Other extensions show their own selection chips a moment later — check again.
+    clearTimeout(pop._stbsAvoid1); clearTimeout(pop._stbsAvoid2);
+    pop._stbsAvoid1 = setTimeout(() => pop.isConnected && avoidOtherPopups(pop), 150);
+    pop._stbsAvoid2 = setTimeout(() => pop.isConnected && avoidOtherPopups(pop), 500);
+}
+
+// Floating selection tools from other extensions (e.g. Blue Lemonade "다시 쓰기" quick-ban chip,
+// LLM translator selection bar). Our toolbar moves out of their way instead of covering them.
+const OTHER_SELECTION_TOOLS = ['.bwr_quickban', '#llmt-selection-selection'];
+
+function avoidOtherPopups(pop) {
+    const mine = () => pop.getBoundingClientRect();
+    const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    for (const sel of OTHER_SELECTION_TOOLS) {
+        for (const el of document.querySelectorAll(sel)) {
+            if (el.hidden || !el.isConnected) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue;
+            const o = el.getBoundingClientRect();
+            if (!o.width || !o.height) continue;
+            let r = mine();
+            if (!overlaps(r, o)) continue;
+            let top = o.bottom + 8;
+            if (top + r.height > window.innerHeight - 8) top = o.top - r.height - 8;
+            if (top < 8) top = Math.min(window.innerHeight - r.height - 8, o.bottom + 8);
+            pop.style.top = `${Math.max(8, top)}px`;
+        }
+    }
 }
 
 function colorDots(active = null, withNone = false) {
