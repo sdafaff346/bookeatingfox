@@ -741,3 +741,39 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent);
 }
 #stbs-panel select.stbs-sel:focus { outline: none; border-color: var(--stbs-accent) !important; box-shadow: 0 0 0 3px var(--stbs-accent-soft) !important; }
 #stbs-panel select.stbs-sel option { background: var(--stbs-bg); color: var(--stbs-fg); }
+
+/* ================= mobile: full-screen window (dialog, top layer) ================= */
+#stbs-dialog {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
+    background: transparent;
+    overflow: hidden;
+    color-scheme: normal;
+}
+#stbs-dialog::backdrop { background: rgba(10, 6, 3, .45); }
+#stbs-panel.page {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+#stbs-panel.page.anim { animation: stbs-slide .22s cubic-bezier(.2, .8, .3, 1); }
+@keyframes stbs-slide { from { transform: translateX(24px); opacity: 0; } }
+#stbs-panel.page .stbs-head { cursor: default; padding-top: calc(12px + env(safe-area-inset-top)); padding-left: 6px; }
+#stbs-panel.page .stbs-resize, #stbs-panel.page .stbs-grab { display: none; }
+.stbs-back { display: none !important; }
+#stbs-panel.page .stbs-back { display: grid !important; font-size: 17px; }
+#stbs-panel.page .stbs-x { display: none; }
+#stbs-dialog #stbs-modal { z-index: 5000; }
+#stbs-panel.page { z-index: 1; }

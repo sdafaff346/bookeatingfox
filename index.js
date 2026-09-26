@@ -377,9 +377,8 @@ async function jumpTo(i, noteId = null) {
     decorateMessage(i);
     decorateChapters();
     const target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
-    const mobile = isMobile() && panelOpen();
-    if (mobile) setSheetHeight($id('stbs-panel'), Math.round(window.innerHeight * 0.42));
-    target.scrollIntoView({ behavior: 'smooth', block: mobile ? 'start' : 'center' });
+    if (isMobile() && panelOpen()) closePanel();
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const flashEl = target === el ? el : target;
     flashEl.classList.remove('stbs-flash');
     void flashEl.offsetWidth;
@@ -493,7 +492,7 @@ function openModal(title, bodyHtml, { wide = false } = {}) {
         </div>`;
     wrap.addEventListener('pointerdown', (e) => { if (e.target === wrap) closeModal(); });
     wrap.addEventListener('click', (e) => { if (e.target.closest('[data-act="modal-close"]')) closeModal(); });
-    document.body.appendChild(wrap);
+    overlayHost().appendChild(wrap);
     return wrap.querySelector('.stbs-modal-body');
 }
 
@@ -873,9 +872,10 @@ function buildPanel() {
     p.innerHTML = `
         <div class="stbs-grab" data-drag="sheet"><span></span></div>
         <div class="stbs-head" data-drag="move">
+            <div class="stbs-icon-btn stbs-back fa-solid fa-chevron-left" data-act="close" title="채팅으로 돌아가기"></div>
             <div class="stbs-title"><span class="stbs-avatar">${FOX_SVG}</span><div class="stbs-title-text"><b>${APP_NAME}</b><span class="stbs-sub" id="stbs-chatname"></span></div></div>
             <div class="stbs-icon-btn fa-solid fa-file-export" data-act="export" title="내보내기 / 불러오기"></div>
-            <div class="stbs-icon-btn fa-solid fa-xmark" data-act="close" title="닫기"></div>
+            <div class="stbs-icon-btn stbs-x fa-solid fa-xmark" data-act="close" title="닫기"></div>
         </div>
         <div class="stbs-tabs">${TABS.map(([k, ic, name]) => `<div class="stbs-tab" data-tab="${k}"><i class="fa-solid ${ic}"></i><span>${name}</span></div>`).join('')}</div>
         <div class="stbs-body" id="stbs-body"></div>
@@ -916,17 +916,13 @@ function applyGeometry() {
     const s = settings();
     const vw = window.innerWidth, vh = window.innerHeight;
     if (isMobile()) {
-        p.classList.add('sheet');
-        p.classList.remove('float');
-        const h = Math.round(Math.min(0.95, Math.max(0.3, s.sheetH || 0.62)) * vh);
-        // Always position with top/left in px: some SillyTavern mobile layouts put a transform on <html>,
-        // which makes `bottom: 0` / `inset: 0` resolve against a zero-height box (panel ends up off-screen).
-        Object.assign(p.style, { left: '0px', right: 'auto', bottom: 'auto', width: `${vw}px` });
-        setSheetHeight(p, h);
+        p.classList.add('page');
+        p.classList.remove('float', 'sheet');
+        p.removeAttribute('style');
         return;
     }
     p.classList.add('float');
-    p.classList.remove('sheet');
+    p.classList.remove('sheet', 'page');
     const g = s.panel || { w: 400, h: Math.min(720, vh - 90), x: vw - 400 - 20, y: 60 };
     const w = Math.min(Math.max(300, g.w), vw - 16);
     const h = Math.min(Math.max(320, g.h), vh - 16);
@@ -941,8 +937,8 @@ function onPanelPointerDown(e) {
     const p = $id('stbs-panel');
     const mode = handle.dataset.drag;
     const mobile = isMobile();
-    if (mobile && mode === 'resize') return;
-    if (!mobile && mode === 'sheet') return;
+    if (mobile) return;
+    if (mode === 'sheet') return;
     e.preventDefault();
     const rect = p.getBoundingClientRect();
     const sx = e.clientX, sy = e.clientY;
@@ -989,7 +985,14 @@ function openPanel(tab) {
     buildPanel();
     if (tab && TABS.some(t => t[0] === tab)) ui.tab = tab;
     const p = $id('stbs-panel');
+    placePanel();
     applyGeometry();
+    if (isMobile()) {
+        const dlg = $id('stbs-dialog');
+        if (!dlg.open) { try { dlg.showModal(); } catch { dlg.setAttribute('open', ''); } }
+        const tc = $id('toast-container');
+        if (tc) dlg.appendChild(tc);
+    }
     if (!p.classList.contains('open')) {
         p.classList.add('anim');
         p.addEventListener('animationend', () => p.classList.remove('anim'), { once: true });
@@ -1002,13 +1005,59 @@ function openPanel(tab) {
 function closePanel() {
     $id('stbs-panel')?.classList.remove('open');
     document.body.classList.remove('stbs-panel-open');
+    const dlg = $id('stbs-dialog');
+    if (dlg?.open) dlg.close();
+    const tc = $id('toast-container');
+    if (tc && tc.parentElement !== document.body) document.body.appendChild(tc);
+}
+
+/** Where popups (memo, card, export) are attached: inside the mobile window when it is open. */
+function overlayHost() {
+    const dlg = $id('stbs-dialog');
+    return dlg?.open ? dlg : document.body;
+}
+
+/**
+ * Mobile: the panel lives inside a full-screen <dialog> (browser top layer), so no SillyTavern
+ * layout, transform or z-index can hide it. Desktop: floating, movable window on <body>.
+ */
+function placePanel() {
+    const p = $id('stbs-panel');
+    if (!p) return;
+    if (isMobile()) {
+        let dlg = $id('stbs-dialog');
+        if (!dlg) {
+            dlg = document.createElement('dialog');
+            dlg.id = 'stbs-dialog';
+            dlg.addEventListener('close', () => {
+                $id('stbs-panel')?.classList.remove('open');
+                document.body.classList.remove('stbs-panel-open');
+                const tc = $id('toast-container');
+                if (tc && tc.parentElement !== document.body) document.body.appendChild(tc);
+            });
+            document.body.appendChild(dlg);
+        }
+        themed(dlg);
+        if (p.parentElement !== dlg) dlg.appendChild(p);
+    } else {
+        const dlg = $id('stbs-dialog');
+        if (dlg?.open) dlg.close();
+        if (p.parentElement !== document.body) document.body.appendChild(p);
+    }
 }
 
 function togglePanel(tab) {
     if (panelOpen() && (!tab || tab === ui.tab)) closePanel(); else openPanel(tab);
 }
 
-window.addEventListener('resize', debounce(applyGeometry, 120));
+window.addEventListener('resize', debounce(() => {
+    const wasOpen = panelOpen();
+    const before = $id('stbs-panel')?.parentElement?.id;
+    placePanel();
+    applyGeometry();
+    const after = $id('stbs-panel')?.parentElement?.id;
+    if (wasOpen && before !== after) openPanel();
+}, 150));
 
 function refreshPanel() {
     if (panelOpen()) renderPanel();
