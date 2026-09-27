@@ -1,15 +1,26 @@
 # 🦊 책 먹는 여우 (Book-Eating Fox) for SillyTavern
 
 채팅을 한 권의 책처럼 읽게 해주는 확장입니다. 책갈피, 리디 스타일 독서노트, 챕터와 목차, 채팅 검색, 독서 통계, 명대사 카드, 내보내기를 여우가 챙겨줍니다.
-외부 라이브러리 없이 파일 3개로 만들었습니다. 웹폰트는 Gowun Batang 하나만 씁니다.
+외부 라이브러리 없이 파일 3개로 만들었습니다. 웹폰트는 Gowun Batang(인용문), Jua(제목), Pretendard(본문)를 쓰고, 불러오지 못하면 기기 글꼴로 보여 줍니다.
 
 ## 설치
 
-1. 이 폴더(`SillyTavern-BookFox`)를 통째로 아래 위치 중 한 곳에 넣으세요.
-   - 내 계정에만 설치: `SillyTavern/data/default-user/extensions/`
-   - 모든 사용자에게 설치: `SillyTavern/public/scripts/extensions/third-party/`
-2. 예전 `SillyTavern-Bookshelf`(책갈피) 폴더가 있다면 지우세요. 저장된 책갈피와 노트는 그대로 이어집니다.
-3. SillyTavern을 새로고침하세요.
+**SillyTavern 확장 설치 기능으로 (추천)**
+
+1. SillyTavern 위쪽 메뉴의 **확장(퍼즐 조각) → Install extension**을 누르세요.
+2. 아래 주소를 붙여 넣고 **Install**(관리자 계정이면 Install just for me)를 누르세요.
+   ```
+   https://github.com/sdafaff346/bookeatingfox.git
+   ```
+3. 설치가 끝나면 새로고침하고, **마법봉 메뉴 → 책 먹는 여우**로 패널을 여세요.
+4. 업데이트는 확장 관리(Manage extensions)에서 책 먹는 여우 옆 업데이트 버튼으로 할 수 있어요.
+
+**직접 넣기**
+
+1. [GitHub 저장소](https://github.com/sdafaff346/bookeatingfox)에서 Code → Download ZIP으로 받아 압축을 푸세요.
+2. 폴더를 통째로 `SillyTavern/data/default-user/extensions/`(내 계정만) 또는 `SillyTavern/public/scripts/extensions/third-party/`(모든 사용자)에 넣고 새로고침하세요.
+
+예전 `SillyTavern-Bookshelf`(책갈피) 폴더가 있다면 지우세요. 저장된 책갈피와 노트는 그대로 이어집니다.
 
 ## 패널 열기와 옮기기
 

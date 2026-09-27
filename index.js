@@ -1141,12 +1141,16 @@ function setSheetHeight(p, h) {
 /** Load the web font without tying extension activation to a third-party request. */
 function loadWebFont() {
     if (document.getElementById('stbs-font')) return;
-    const link = document.createElement('link');
-    link.id = 'stbs-font';
-    link.rel = 'stylesheet';
-    link.href = 'https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&display=swap';
-    link.onerror = () => link.remove();
-    document.head.appendChild(link);
+    const add = (id, href) => {
+        const link = document.createElement('link');
+        link.id = id;
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.onerror = () => link.remove();
+        document.head.appendChild(link);
+    };
+    add('stbs-font', 'https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Jua&display=swap');
+    add('stbs-font-sans', 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
 }
 
 /** Desktop: floating window at saved x/y/w/h. Mobile: bottom sheet with saved height. */
