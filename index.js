@@ -769,7 +769,8 @@ function drawCard(canvas, { text, who, chapter, source }, themeKey) {
     g.strokeRect(48, 48, W - 96, H - 96);
     g.globalAlpha = 1;
 
-    const serif = '"Gowun Batang", "Noto Serif KR", "Nanum Myeongjo", "Batang", serif';
+    // Card text uses the chat's own font (theme font), falling back to the system serif.
+    const serif = `${pageFonts().readFont}, serif`;
     g.fillStyle = t.accent;
     g.font = `bold 200px ${serif}`;
     g.textBaseline = 'top';
@@ -881,7 +882,7 @@ function openCard({ text, mesId, who }) {
     });
     Promise.all([
         loadFoxImage(),
-        document.fonts?.load?.('40px "Gowun Batang"').catch(() => { }),
+        document.fonts?.ready?.catch?.(() => { }),
     ]).then(redraw);
     redraw();
 }
@@ -1093,8 +1094,21 @@ function isMobile() {
     return window.matchMedia('(max-width: 800px)').matches;
 }
 
+/** Fonts of the live page, so our UI follows whatever theme (ST theme, Blue Lemonade, …) is active. */
+function pageFonts() {
+    const chatText = document.querySelector('#chat .mes:not(.smallSysMes) .mes_text') || document.querySelector('#chat') || document.body;
+    const read = getComputedStyle(chatText);
+    const body = getComputedStyle(document.body);
+    return { uiFont: body.fontFamily, uiSize: body.fontSize, readFont: read.fontFamily, readSize: read.fontSize };
+}
+
 function themed(el) {
     el.dataset.stbsTheme = resolvedTheme();
+    const f = pageFonts();
+    el.style.setProperty('--stbs-ui-font', f.uiFont);
+    el.style.setProperty('--stbs-fs', f.uiSize);
+    el.style.setProperty('--stbs-read-font', f.readFont);
+    el.style.setProperty('--stbs-read-size', f.readSize);
     return el;
 }
 
@@ -1136,21 +1150,6 @@ function buildPanel() {
 function setSheetHeight(p, h) {
     p.style.height = `${Math.round(h)}px`;
     p.style.top = `${Math.round(window.innerHeight - h)}px`;
-}
-
-/** Load the web font without tying extension activation to a third-party request. */
-function loadWebFont() {
-    if (document.getElementById('stbs-font')) return;
-    const add = (id, href) => {
-        const link = document.createElement('link');
-        link.id = id;
-        link.rel = 'stylesheet';
-        link.href = href;
-        link.onerror = () => link.remove();
-        document.head.appendChild(link);
-    };
-    add('stbs-font', 'https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Jua&display=swap');
-    add('stbs-font-sans', 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
 }
 
 /** Desktop: floating window at saved x/y/w/h. Mobile: bottom sheet with saved height. */
@@ -1241,6 +1240,7 @@ function openPanel(tab) {
         p.classList.add('anim');
         p.addEventListener('animationend', () => p.classList.remove('anim'), { once: true });
     }
+    themed(p); // pick up the theme's current fonts/colours every time the panel opens
     p.classList.add('open');
     document.body.classList.add('stbs-panel-open');
     renderPanel();
@@ -2075,7 +2075,8 @@ function injectTemplateButtons() {
     eventSource.on(event_types.APP_READY, () => {
         buildSettingsUI();
         buildWandItem();
-        loadWebFont();
+        document.getElementById('stbs-font')?.remove();
+        document.getElementById('stbs-font-sans')?.remove();
         $id('stbs-send-btn')?.remove();
         $id('stbs-fab')?.remove();
         injectTemplateButtons();
