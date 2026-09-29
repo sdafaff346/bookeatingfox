@@ -16,6 +16,7 @@ const DEFAULTS = Object.freeze({
     charsPerPage: 600,
     cardTheme: 'fox',
     cardFox: true,
+    cardTransFirst: false,
     panel: null,
     sheetH: 0.62,
 });
@@ -234,6 +235,62 @@ function offsetIn(root, node, offset) {
     return r.toString().length;
 }
 
+const BLOCK_TAGS = /^(P|DIV|LI|UL|OL|DL|DT|DD|BLOCKQUOTE|H[1-6]|PRE|TABLE|TR|DETAILS|SUMMARY|SECTION|ARTICLE|HEADER|FOOTER|FIGURE|FIGCAPTION|HR)$/;
+const SKIP_TAGS = /^(STYLE|SCRIPT|TEMPLATE|NOSCRIPT)$/;
+
+/**
+ * The text between [start,end) (textContent coordinates) as it *looks* in the chat:
+ * <br> becomes a line break, paragraphs/blocks become a blank line, source-code whitespace is collapsed.
+ */
+function formattedRange(root, start, end) {
+    let pos = 0, out = '';
+    const inRange = () => pos > start && pos < end;
+    const brk = (s) => { if (inRange()) out += s; };
+    const walk = (node) => {
+        for (let c = node.firstChild; c; c = c.nextSibling) {
+            if (c.nodeType === 3) {
+                const t = c.data, a = Math.max(start, pos), b = Math.min(end, pos + t.length);
+                if (b > a) out += t.slice(a - pos, b - pos).replace(/[\t\r\n\f ]+/g, ' ');
+                pos += t.length;
+            } else if (c.nodeType === 1) {
+                if (SKIP_TAGS.test(c.nodeName)) { pos += c.textContent.length; continue; }
+                if (c.nodeName === 'BR') { brk('\n'); continue; }
+                const block = BLOCK_TAGS.test(c.nodeName);
+                if (block) brk('\n\n');
+                walk(c);
+                if (block) brk('\n\n');
+            }
+        }
+    };
+    walk(root);
+    return out
+        .replace(/[ \u00a0]*\n[ \u00a0]*/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/ {2,}/g, ' ')
+        .trim();
+}
+
+/** Message source → readable text that keeps line breaks and paragraphs. */
+function plainKeep(mes) {
+    return String(mes ?? '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|blockquote|h[1-6])>/gi, '\n\n')
+        .replace(/<[^>]*>/g, '')
+        .replace(/^[ \t]*(#{1,6}|>+)[ \t]+/gm, '')
+        .replace(/[*_~`]+/g, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/** What a note shows: the formatted text (keeps the chat's paragraphs) or the raw quote for old notes. */
+function noteText(n) {
+    if (!n) return '';
+    if (n.start == null) return plainKeep(msg(n.mesId)?.mes);
+    return n.text || n.quote;
+}
+
 function unwrapMarks(root) {
     const marks = root.querySelectorAll('mark.stbs-hl');
     if (!marks.length) return;
@@ -310,6 +367,8 @@ function decorateMessage(i) {
             dirty = true;
         }
         staleNotes.delete(n.id);
+        const fmt = formattedRange(textEl, n.start, n.end);
+        if (fmt && fmt !== (n.text || n.quote)) { if (fmt === n.quote) delete n.text; else n.text = fmt; dirty = true; }
         const colored = n.color != null;
         if (colored && !s.showHighlights) continue;
         if (!colored && !s.showMemoUnderline) continue;
@@ -443,8 +502,9 @@ async function deleteChapter(id) {
     refreshPanel();
 }
 
-function createNote({ mesId, start = null, end = null, quote = '', color = null, memo = '' }) {
+function createNote({ mesId, start = null, end = null, quote = '', text = '', color = null, memo = '' }) {
     const n = { id: uid(), mesId, start, end, quote, color, memo, created: Date.now(), updated: Date.now(), sig: sigAt(mesId) };
+    if (start != null && text && text !== quote) n.text = text;
     data().notes.push(n);
     persist();
     decorateMessage(mesId);
@@ -530,7 +590,7 @@ function closeMesMenu(btn) {
 }
 
 function openMemoEditor({ note = null, pending = null, mesId = null }) {
-    const quote = note ? note.quote : pending ? pending.quote : '';
+    const quote = note ? (note.start != null ? noteText(note) : '') : pending ? (pending.text || pending.quote) : '';
     const i = note ? note.mesId : pending ? pending.mesId : mesId;
     const quoteHtml = quote
         ? `<blockquote class="stbs-quote">${esc(quote)}</blockquote>`
@@ -579,7 +639,7 @@ function readSelection() {
     while (start < end && /\s/.test(full[start])) start++;
     while (end > start && /\s/.test(full[end - 1])) end--;
     if (end - start < 1) return null;
-    return { mesId, start, end, quote: full.slice(start, end), rect: range.getBoundingClientRect() };
+    return { mesId, start, end, quote: full.slice(start, end), text: formattedRange(root, start, end), rect: range.getBoundingClientRect() };
 }
 
 const repositionPopup = debounce(() => {
@@ -656,7 +716,7 @@ function showSelPopup(sel) {
     bindPopup(pop, (act, color) => {
         const p = pendingSel;
         if (!p) return;
-        const base = { mesId: p.mesId, start: p.start, end: p.end, quote: p.quote };
+        const base = { mesId: p.mesId, start: p.start, end: p.end, quote: p.quote, text: p.text };
         if (act === 'color') {
             const n = createNote({ ...base, color });
             window.getSelection()?.removeAllRanges();
@@ -668,9 +728,9 @@ function showSelPopup(sel) {
             openMemoEditor({ pending: base });
         } else if (act === 'card') {
             hideSelPopup();
-            openCard({ text: p.quote, mesId: p.mesId });
+            openCard({ text: p.text || p.quote, mesId: p.mesId });
         } else if (act === 'copy') {
-            navigator.clipboard?.writeText(p.quote).then(() => toastr.success('복사했어요.'));
+            navigator.clipboard?.writeText(p.text || p.quote).then(() => toastr.success('복사했어요.'));
             hideSelPopup();
         }
     });
@@ -695,7 +755,7 @@ function showNotePopup(noteId, rect) {
     bindPopup(pop, (act, color) => {
         if (act === 'color') { updateNote(n.id, { color }); hideSelPopup(); }
         else if (act === 'memo') { hideSelPopup(); openMemoEditor({ note: n }); }
-        else if (act === 'card') { hideSelPopup(); openCard({ text: n.quote, mesId: n.mesId }); }
+        else if (act === 'card') { hideSelPopup(); openCard({ note: n }); }
         else if (act === 'delete') { hideSelPopup(); deleteNote(n.id); }
     });
     placePopup(pop, rect);
@@ -751,7 +811,22 @@ function wrapLines(g, text, maxW) {
     return lines;
 }
 
-function drawCard(canvas, { text, who, chapter, source }, themeKey) {
+/** Split text into one sentence per line (keeps existing paragraph breaks). */
+function sentencePerLine(text) {
+    return String(text).split(/\n{2,}/).map(par => par
+        .replace(/\s*\n\s*/g, ' ')
+        .replace(/([.!?。！？…~]+["'”’)\]」』]*)\s+(?=\S)/g, '$1\n')
+        .trim()).filter(Boolean).join('\n\n');
+}
+const oneParagraph = (text) => String(text).replace(/\s*\n+\s*/g, ' ').replace(/ {2,}/g, ' ').trim();
+
+/** Lay out one text block: returns { lines } where '' marks a paragraph gap. */
+function layoutBlock(g, text, font, maxW) {
+    g.font = font;
+    return wrapLines(g, text, maxW);
+}
+
+function drawCard(canvas, { text, trans = '', transFirst = false, who, chapter, source }, themeKey) {
     const t = CARD_THEMES[themeKey] || CARD_THEMES.paper;
     const W = 1080, H = 1350, PAD = 110;
     canvas.width = W;
@@ -776,22 +851,55 @@ function drawCard(canvas, { text, who, chapter, source }, themeKey) {
     g.textBaseline = 'top';
     g.fillText('“', PAD - 20, 90);
 
+    const main = String(text || '').trim(), sub = String(trans || '').trim();
+    const blocks = sub ? (transFirst ? [[sub, 1], [main, 0.74]] : [[main, 1], [sub, 0.74]]) : [[main, 1]];
     const maxW = W - PAD * 2;
-    const areaTop = 330, areaBottom = H - 300;
-    let size = 64, lines, lh;
-    for (; size >= 28; size -= 2) {
-        g.font = `${size}px ${serif}`;
-        lines = wrapLines(g, text, maxW);
-        lh = size * 1.6;
-        if (lines.length * lh <= areaBottom - areaTop) break;
+    const areaTop = 330, areaBottom = H - 300, avail = areaBottom - areaTop;
+    const DIVIDE = 64;               // space for the line between original and translation
+    const PARA = 0.55;               // blank line = a little more than half a line
+    const measure = (size) => {
+        let total = sub ? DIVIDE : 0;
+        const laid = blocks.map(([txt, scale]) => {
+            const fs = Math.round(size * scale), lh = fs * 1.6;
+            const lines = layoutBlock(g, txt, `${fs}px ${serif}`, maxW);
+            const h = lines.reduce((acc, l) => acc + (l === '' ? lh * PARA : lh), 0);
+            total += h;
+            return { lines, fs, lh, h, scale };
+        });
+        return { laid, total };
+    };
+    let size = 64, m;
+    for (; size >= 24; size -= 2) { m = measure(size); if (m.total <= avail) break; }
+    // still too long: cut each block to fit its share
+    if (m.total > avail) {
+        let room = avail - (sub ? DIVIDE : 0);
+        for (const b of m.laid) {
+            const share = room * (b.h / Math.max(1, m.total - (sub ? DIVIDE : 0)));
+            let h = 0, keep = [];
+            for (const l of b.lines) { const lh = l === '' ? b.lh * PARA : b.lh; if (h + lh > share) break; keep.push(l); h += lh; }
+            if (keep.length < b.lines.length && keep.length) keep[keep.length - 1] = keep[keep.length - 1].replace(/.?$/, '…');
+            b.lines = keep; b.h = h;
+        }
+        m.total = m.laid.reduce((a2, b2) => a2 + b2.h, sub ? DIVIDE : 0);
     }
-    const maxLines = Math.floor((areaBottom - areaTop) / lh);
-    if (lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] = lines[maxLines - 1].replace(/.?$/, '…'); }
-    g.fillStyle = t.fg;
+    let y = areaTop + (avail - m.total) / 2;
     g.textBaseline = 'alphabetic';
-    const blockH = lines.length * lh;
-    let y = areaTop + (areaBottom - areaTop - blockH) / 2 + size;
-    for (const l of lines) { g.fillText(l, PAD, y); y += lh; }
+    m.laid.forEach((b, k) => {
+        g.font = `${b.fs}px ${serif}`;
+        g.fillStyle = b.scale < 1 ? t.sub : t.fg;
+        for (const l of b.lines) {
+            if (l === '') { y += b.lh * PARA; continue; }
+            g.fillText(l, PAD, y + b.fs);
+            y += b.lh;
+        }
+        if (sub && k === 0) {
+            g.fillStyle = t.accent;
+            g.globalAlpha = 0.7;
+            g.fillRect(PAD, y + DIVIDE / 2 - 1, 44, 3);
+            g.globalAlpha = 1;
+            y += DIVIDE;
+        }
+    });
 
     g.fillStyle = t.accent;
     g.fillRect(PAD, H - 250, 70, 4);
@@ -826,17 +934,51 @@ function loadFoxImage() {
     });
 }
 
-function openCard({ text, mesId, who }) {
+function openCard({ text, trans = '', mesId, who, note = null }) {
     const s = settings();
+    if (note) { mesId = note.mesId; text = noteText(note); trans = note.trans || ''; }
+    const m = msg(mesId);
+    // Whole message + SillyTavern's own translation (extra.display_text) → prefill both languages.
+    if (!text) {
+        text = plainKeep(m?.mes);
+        if (!trans && m?.extra?.display_text && plainKeep(m.extra.display_text) !== text) trans = plainKeep(m.extra.display_text);
+    }
+    const original = text;
+    // The other language of this message (SillyTavern translate keeps the original in `mes`
+    // and shows extra.display_text), so the translation box can be filled in one tap.
+    let alt = '';
+    if (m?.extra?.display_text) {
+        const shown = plainKeep(m.extra.display_text), src = plainKeep(m.mes);
+        const probe = oneParagraph(text).slice(0, 12);
+        alt = probe && oneParagraph(shown).includes(probe) ? src : shown;
+        if (alt === text) alt = '';
+    }
     const ch = chapterOf(mesId);
-    const info = { text: text || plain(msg(mesId)?.mes), who: who ?? speaker(mesId), chapter: sortedChapters().length ? chapterLabel(ch) : '', source: ctx().getCurrentChatId?.() || '' };
+    const info = { text, who: who ?? speaker(mesId), chapter: sortedChapters().length ? chapterLabel(ch) : '', source: ctx().getCurrentChatId?.() || '' };
     const themes = Object.entries(CARD_THEMES).map(([k, t]) =>
         `<div class="stbs-chip ${k === s.cardTheme ? 'active' : ''}" data-theme="${k}"><span class="stbs-swatch" style="background:linear-gradient(135deg,${t.bg[0]},${t.bg[1]})"></span>${t.name}</div>`).join('');
     const body = openModal('명대사 카드', `
         <div class="stbs-card-wrap"><canvas id="stbs-card-canvas"></canvas></div>
         <div class="stbs-row stbs-wrap">${themes}</div>
-        <label class="stbs-label">문장</label>
-        <textarea id="stbs-card-text" class="text_pole stbs-textarea" rows="3">${esc(info.text)}</textarea>
+        <div class="stbs-row stbs-between stbs-wrap">
+            <label class="stbs-label">문장 <span class="stbs-dim">· 원문</span></label>
+            <div class="stbs-row stbs-wrap stbs-card-tools">
+                <div class="stbs-chip" data-break="keep" title="채팅에서 보이던 그대로">원문 줄바꿈</div>
+                <div class="stbs-chip" data-break="sentence" title="문장마다 줄을 바꿔요">문장마다</div>
+                <div class="stbs-chip" data-break="flow" title="줄바꿈 없이 한 덩어리로">한 문단</div>
+            </div>
+        </div>
+        <textarea id="stbs-card-text" class="text_pole stbs-textarea" rows="4">${esc(info.text)}</textarea>
+        <div class="stbs-hint">엔터로 줄을 바꾸고, 빈 줄을 넣으면 문단이 나뉘어요.</div>
+        <div class="stbs-row stbs-between stbs-wrap">
+            <label class="stbs-label">번역 <span class="stbs-dim">· 선택 (예: 영어 원문 아래 한국어)</span></label>
+            <div class="stbs-row stbs-wrap">
+                <div class="stbs-chip ${s.cardTransFirst ? '' : 'active'}" data-order="orig">원문 위</div>
+                <div class="stbs-chip ${s.cardTransFirst ? 'active' : ''}" data-order="trans">번역 위</div>
+            </div>
+        </div>
+        <textarea id="stbs-card-trans" class="text_pole stbs-textarea stbs-trans" rows="3" placeholder="번역 문장을 적으면 카드에 작게 함께 들어가요">${esc(trans)}</textarea>
+        ${alt ? `<div class="stbs-row stbs-wrap"><div class="stbs-chip" data-alt title="이 메시지의 다른 언어 전체를 넣어요. 필요한 부분만 남기세요."><i class="fa-solid fa-language"></i> 메시지의 다른 언어 불러오기</div></div>` : ''}
         <label class="checkbox_label stbs-inline"><input type="checkbox" id="stbs-card-fox" ${s.cardFox ? 'checked' : ''}> <span>여우 도장 찍기</span></label>
         <div class="stbs-row">
             <input id="stbs-card-who" class="text_pole" placeholder="화자" value="${esc(info.who)}">
@@ -847,15 +989,25 @@ function openCard({ text, mesId, who }) {
             <div class="stbs-btn stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG 저장</div>
         </div>`, { wide: true });
     const canvas = body.querySelector('#stbs-card-canvas');
+    const ta = body.querySelector('#stbs-card-text');
+    const tr = body.querySelector('#stbs-card-trans');
     let theme = s.cardTheme;
     const redraw = () => drawCard(canvas, {
-        text: body.querySelector('#stbs-card-text').value,
+        text: ta.value,
+        trans: tr.value,
+        transFirst: !!s.cardTransFirst,
         who: body.querySelector('#stbs-card-who').value.trim(),
         chapter: body.querySelector('#stbs-card-ch').value.trim(),
         source: '',
     }, theme);
     const redrawSoon = debounce(redraw, 150);
-    body.addEventListener('input', redrawSoon);
+    // keep a note's translation so the next card (and the notes list / export) has it too
+    const saveTrans = debounce(() => {
+        if (!note || !getNote(note.id)) return;
+        const v = tr.value.trim();
+        if ((note.trans || '') !== v) { if (v) note.trans = v; else delete note.trans; persist(); refreshPanel(); }
+    }, 500);
+    body.addEventListener('input', (e) => { redrawSoon(); if (e.target === tr) saveTrans(); });
     body.querySelector('#stbs-card-fox').addEventListener('change', (e) => { s.cardFox = e.target.checked; saveSettings(); redraw(); });
     body.addEventListener('click', (e) => {
         const chip = e.target.closest('[data-theme]');
@@ -864,6 +1016,29 @@ function openCard({ text, mesId, who }) {
             s.cardTheme = theme;
             saveSettings();
             body.querySelectorAll('[data-theme]').forEach(x => x.classList.toggle('active', x === chip));
+            redraw();
+            return;
+        }
+        const br = e.target.closest('[data-break]');
+        if (br) {
+            const mode = br.dataset.break;
+            const apply = (v, orig) => mode === 'keep' ? orig : mode === 'sentence' ? sentencePerLine(v) : oneParagraph(v);
+            ta.value = apply(ta.value, original);
+            if (tr.value.trim()) tr.value = mode === 'keep' ? tr.value : apply(tr.value, tr.value);
+            redraw();
+            return;
+        }
+        if (e.target.closest('[data-alt]')) {
+            tr.value = alt;
+            saveTrans();
+            redraw();
+            return;
+        }
+        const ord = e.target.closest('[data-order]');
+        if (ord) {
+            s.cardTransFirst = ord.dataset.order === 'trans';
+            saveSettings();
+            body.querySelectorAll('[data-order]').forEach(x => x.classList.toggle('active', x === ord));
             redraw();
         }
     });
@@ -1076,9 +1251,10 @@ async function deleteScrap(id) {
 
 function cardFromNotes(notes) {
     if (!notes.length) return;
-    const text = notes.map(n => n.start != null ? n.quote : plain(msg(n.mesId)?.mes)).join('\n\n');
+    const text = notes.map(noteText).join('\n\n');
+    const trans = notes.some(n => n.trans) ? notes.map(n => n.trans || '').filter(Boolean).join('\n\n') : '';
     const speakers = [...new Set(notes.map(n => speaker(n.mesId)))];
-    openCard({ text, mesId: notes[0].mesId, who: speakers.length === 1 ? speakers[0] : '' });
+    openCard({ text, trans, mesId: notes[0].mesId, who: speakers.length === 1 ? speakers[0] : '' });
 }
 
 function endSelecting() {
@@ -1404,7 +1580,7 @@ function noteCard(n, { inScrap = null } = {}) {
     const colorCss = n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : '';
     const stale = staleNotes.has(n.id) ? '<span class="stbs-badge">원문 변경됨</span>' : '';
     const quote = n.start != null
-        ? `<div class="stbs-note-quote">${esc(n.quote)}</div>`
+        ? `<div class="stbs-note-quote">${esc(noteText(n))}</div>${n.trans ? `<div class="stbs-note-trans">${esc(n.trans)}</div>` : ''}`
         : `<div class="stbs-note-quote stbs-whole"><span class="stbs-badge">메시지 전체</span> ${esc(clip(plain(msg(n.mesId)?.mes), 120))}</div>`;
     const sel = ui.selecting;
     const on = ui.selected.has(n.id);
@@ -1710,7 +1886,7 @@ async function onPanelClick(e) {
             case 'note-filter': ui.noteFilter = act.dataset.f; renderPanel(); break;
             case 'note-sort': ui.noteSort = ui.noteSort === 'story' ? 'recent' : 'story'; renderPanel(); break;
             case 'note-edit': { const n = getNote(id); if (n) openMemoEditor({ note: n }); break; }
-            case 'note-card': { const n = getNote(id); if (n) openCard({ text: n.quote || plain(msg(n.mesId)?.mes), mesId: n.mesId }); break; }
+            case 'note-card': { const n = getNote(id); if (n) openCard({ note: n }); break; }
             case 'note-del': await deleteNote(id); break;
             case 'search-word': ui.q = act.dataset.w; ui.tab = 'search'; renderPanel(); break;
             case 'rate': openRatingEditor(act.dataset.target); break;
@@ -1786,8 +1962,9 @@ function buildMarkdown() {
     if (d.bookmarks.length) lines.push('');
 
     section([...d.notes].sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1)), '🖍️ 독서노트', (n) => {
-        const q = n.start != null ? n.quote : `(메시지 전체) ${clip(plain(msg(n.mesId)?.mes), 200)}`;
+        const q = n.start != null ? noteText(n) : `(메시지 전체) ${clip(plain(msg(n.mesId)?.mes), 200)}`;
         for (const l of q.split('\n')) lines.push(`> ${l}`);
+        if (n.trans) { lines.push('>'); for (const l of n.trans.split('\n')) lines.push(l.trim() ? `> *${l.trim()}*` : '>'); }
         const tag = n.color != null ? `${COLOR_EMOJI[n.color]} ${COLOR_NAMES[n.color]}` : '📝 메모';
         lines.push('>', `> — ${speaker(n.mesId)} · #${n.mesId} · ${fmtDate(n.updated)} · ${tag}`, '');
         if (n.memo) { lines.push(...n.memo.split('\n').map(l => `📝 ${l}`), ''); }
@@ -1799,7 +1976,7 @@ function buildMarkdown() {
             const ns = scrapNotes(sb);
             lines.push(`### ${sb.emoji || '📒'} ${sb.name} (${ns.length})`, '');
             for (const n of ns) {
-                const q = n.start != null ? n.quote : clip(plain(msg(n.mesId)?.mes), 200);
+                const q = n.start != null ? noteText(n) : clip(plain(msg(n.mesId)?.mes), 200);
                 lines.push(...q.split('\n').map(l => `> ${l}`), `> — ${speaker(n.mesId)} · #${n.mesId}`, '');
                 if (n.memo) lines.push(`📝 ${n.memo.replace(/\n/g, ' ')}`, '');
             }
@@ -2030,7 +2207,7 @@ function bindGlobal() {
         if (act === 'bookmark') toggleBookmark(i);
         else if (act === 'chapter') addChapter(i);
         else if (act === 'memo') openMemoEditor({ mesId: i });
-        else if (act === 'card') openCard({ text: plain(msg(i)?.mes), mesId: i });
+        else if (act === 'card') openCard({ mesId: i });
     });
 
     // chapter divider click -> TOC

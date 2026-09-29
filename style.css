@@ -1053,3 +1053,24 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent-i
 :is(#stbs-panel, #stbs-modal) .stbs-btn.stbs-primary { background: var(--stbs-accent) !important; color: var(--stbs-on-accent) !important; box-shadow: 0 4px 12px color-mix(in srgb, var(--stbs-accent) 30%, transparent); }
 :is(#stbs-panel, #stbs-modal) .stbs-btn.stbs-primary i { color: inherit !important; }
 #stbs-panel .stbs-btn.stbs-ghost { background: transparent !important; }
+
+/* ================= v1.8: translations & card line tools ================= */
+.stbs-note-trans {
+    margin-top: 6px;
+    padding-left: 10px;
+    border-left: 2px solid var(--stbs-line2);
+    font-family: var(--stbs-read-font, inherit);
+    font-size: calc(var(--stbs-read-size, 15px) * .9);
+    line-height: 1.7;
+    color: var(--stbs-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+#stbs-modal .stbs-card-tools .stbs-chip, #stbs-modal [data-order] { height: 28px; padding: 0 11px; font-size: calc(var(--stbs-fs, 14px) * 12 / 14); }
+#stbs-modal .stbs-label .stbs-dim { font-weight: 500; }
+#stbs-modal .stbs-hint { margin-top: -6px; font-size: calc(var(--stbs-fs, 14px) * 11.5 / 14); }
+#stbs-modal .stbs-textarea.stbs-trans { min-height: 72px; }
