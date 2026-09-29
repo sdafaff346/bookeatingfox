@@ -103,33 +103,67 @@
 .stbs-avatar.lg .stbs-fox { font-size: calc(var(--stbs-fs, 14px) * 54 / 14); }
 
 /* ================= chat decorations (follow the chat's own colors) ================= */
-#chat mark.stbs-hl {
-    color: inherit;
-    border-radius: 4px;
-    padding: 0 1px;
+/* Highlights must never change how the text looks — only paint a colour behind it.
+   Themes, presets and custom CSS often style every <mark> in chat (smaller font, padding,
+   letter-spacing, their own colour…). Everything below resets that with high specificity so the
+   highlighted words keep exactly the font, size, spacing and line breaks they had before. */
+#chat .mes .mes_text mark.stbs-hl.stbs-hl {
+    all: unset;
+    display: inline !important;
+    font: inherit !important;
+    font-size: inherit !important;
+    font-family: inherit !important;
+    font-weight: inherit !important;
+    font-style: inherit !important;
+    font-variant: inherit !important;
+    font-feature-settings: inherit !important;
+    font-variation-settings: inherit !important;
+    letter-spacing: inherit !important;
+    word-spacing: inherit !important;
+    line-height: inherit !important;
+    text-transform: inherit !important;
+    text-shadow: inherit !important;
+    vertical-align: baseline !important;
+    color: inherit !important;
+    -webkit-text-fill-color: inherit !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    text-indent: 0 !important;
+    transform: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+    white-space: inherit !important;
+    border-radius: 3px !important;
     cursor: pointer;
     box-decoration-break: clone;
     -webkit-box-decoration-break: clone;
+    background: var(--stbs-hl-bg, transparent) !important;
+    text-decoration: none;
 }
-#chat mark.stbs-c0 { background: color-mix(in srgb, var(--stbs-c0) 42%, transparent); }
-#chat mark.stbs-c1 { background: color-mix(in srgb, var(--stbs-c1) 42%, transparent); }
-#chat mark.stbs-c2 { background: color-mix(in srgb, var(--stbs-c2) 42%, transparent); }
-#chat mark.stbs-c3 { background: color-mix(in srgb, var(--stbs-c3) 42%, transparent); }
-#chat mark.stbs-ul {
-    background: transparent;
-    text-decoration: underline dotted var(--stbs-fox);
-    text-decoration-thickness: 1.5px;
-    text-underline-offset: 4px;
+#chat .mes .mes_text mark.stbs-hl.stbs-c0 { --stbs-hl-bg: color-mix(in srgb, var(--stbs-c0) 42%, transparent); }
+#chat .mes .mes_text mark.stbs-hl.stbs-c1 { --stbs-hl-bg: color-mix(in srgb, var(--stbs-c1) 42%, transparent); }
+#chat .mes .mes_text mark.stbs-hl.stbs-c2 { --stbs-hl-bg: color-mix(in srgb, var(--stbs-c2) 42%, transparent); }
+#chat .mes .mes_text mark.stbs-hl.stbs-c3 { --stbs-hl-bg: color-mix(in srgb, var(--stbs-c3) 42%, transparent); }
+#chat .mes .mes_text mark.stbs-hl.stbs-ul {
+    --stbs-hl-bg: transparent;
+    text-decoration: underline dotted var(--stbs-fox) !important;
+    text-decoration-thickness: 1.5px !important;
+    text-underline-offset: 4px !important;
 }
-#chat mark.stbs-has-memo::after {
+/* memo dot: drawn over the end of the text without taking any width (no reflow) */
+#chat .mes .mes_text mark.stbs-hl.stbs-has-memo::after {
     content: "";
     display: inline-block;
     width: 5px;
     height: 5px;
-    margin: 0 1px 0 3px;
+    margin: 0 -5px 0 0;
     border-radius: 50%;
     background: var(--stbs-fox);
     vertical-align: super;
+    pointer-events: none;
 }
 
 /* Bookmark ribbon sits right after the speaker's name, so it never covers message buttons
