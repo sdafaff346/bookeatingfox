@@ -138,9 +138,11 @@
     white-space: inherit !important;
     border-radius: 3px !important;
     cursor: pointer;
-    box-decoration-break: clone;
-    -webkit-box-decoration-break: clone;
-    background: var(--stbs-hl-bg, transparent) !important;
+    /* NOT "clone": Chrome turns off text-wrap: pretty/balance for a paragraph that contains a
+       cloned inline box, which re-flows the theme's line breaks (Blue Lemonade uses pretty). */
+    box-decoration-break: slice !important;
+    -webkit-box-decoration-break: slice !important;
+    background: var(--stbs-hl-dot, linear-gradient(transparent, transparent)), var(--stbs-hl-bg, transparent) !important;
     text-decoration: none;
 }
 #chat .mes .mes_text mark.stbs-hl.stbs-c0 { --stbs-hl-bg: color-mix(in srgb, var(--stbs-c0) 42%, transparent); }
@@ -153,17 +155,10 @@
     text-decoration-thickness: 1.5px !important;
     text-underline-offset: 4px !important;
 }
-/* memo dot: drawn over the end of the text without taking any width (no reflow) */
-#chat .mes .mes_text mark.stbs-hl.stbs-has-memo::after {
-    content: "";
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    margin: 0 -5px 0 0;
-    border-radius: 50%;
-    background: var(--stbs-fox);
-    vertical-align: super;
-    pointer-events: none;
+/* memo dot: painted into the highlight's own background (top-right of its last line) —
+   no pseudo-element box, so line breaking is never affected */
+#chat .mes .mes_text mark.stbs-hl.stbs-has-memo {
+    --stbs-hl-dot: radial-gradient(circle at calc(100% - 2px) 3px, var(--stbs-fox) 2.4px, transparent 3px);
 }
 
 /* Bookmark ribbon sits right after the speaker's name, so it never covers message buttons
