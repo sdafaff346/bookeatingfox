@@ -54,7 +54,39 @@ const CARD_THEMES = {
     rose: { name: '장미', bg: ['#fde2e4', '#f9c5cf'], fg: '#5a2a35', sub: '#a0616f', accent: '#d9667f' },
     mint: { name: '민트', bg: ['#e3f6ef', '#c7ecdf'], fg: '#1f4b3f', sub: '#5f8f80', accent: '#3aa585' },
     ink: { name: '먹', bg: ['#2b2b2b', '#161616'], fg: '#f3f3f3', sub: '#a8a8a8', accent: '#e85d4a' },
+    // community-post look: the quote as a hot post, with upvotes and reaction comments
+    commu: {
+        name: '커뮤 반응', commu: true, bg: ['#eef0f3', '#ffffff'], fg: '#1f2329', sub: '#7b828c', accent: '#ff6b3d',
+        card: '#ffffff', line: '#e4e7eb', box: '#f5f6f8', best: '#fff0e8', up: '#ff6b3d', soft: '#ffe3d6',
+    },
+    commuDark: {
+        name: '커뮤 다크', commu: true, bg: ['#15171b', '#2a2e35'], fg: '#eceef1', sub: '#8d949e', accent: '#ff8a5c',
+        card: '#1f2228', line: '#30343c', box: '#272b32', best: '#3a2a23', up: '#ff8a5c', soft: '#4a3128',
+    },
 };
+
+// Reaction pools for the community card (picked with a seed, so a card looks the same each time)
+const COMMU_TITLES = ['이 대사 뭐냐 진짜', '오늘자 명대사 박제함', '와 이 장면 미쳤다', '이거 보고 잠 다 깸', '나만 이 대사에 치였냐',
+    '이 대사 몇 번째 보는지 모름', '하 이 장면 진짜…', '명대사 공유함 다들 봐줘', '방금 읽은 거 실화냐', '이 대사 때문에 못 잠'];
+const COMMU_COMMENTS = ['ㅁㅊ 이거 실화냐', '아 이 대사 때문에 밤새 정주행함', '소름 돋았어 진짜…', '저장 완료 ㅠㅠ', '{who} 진짜 미쳤다',
+    '이 장면 몇 번을 돌려보는 건지', '여기서 울었음 아무도 안 물어봤지만', '캡처해서 배경화면 함', '와 문장 맛집이네', '나만 심장 떨어졌냐',
+    '이건 박제해야 됨', '읽다가 소리 지름', 'ㄹㅇ 인생 대사', '이 대사 하나로 3일 버팀', '{who} 이러는 거 반칙 아니냐', '숨 참고 읽음',
+    '와 이건 못 참지', '여기서부터 미쳐 돌아감', '이 맛에 롤플 함', '책으로 내주세요 제발'];
+const COMMU_NICKS = ['익명의 여우', '책먹는여우', '새벽감성', '정주행러', '명대사수집가', '문장덕후', '롤플중독', '눈물버튼', '야행성 독자', '오늘도과몰입'];
+
+function seeded(seed) {
+    let a = (Number(seed) >>> 0) || 1;
+    return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+function commuDefaults(seed, who) {
+    const r = seeded(seed);
+    const pick = (arr, used) => { let k; do k = Math.floor(r() * arr.length); while (used.has(k) && used.size < arr.length); used.add(k); return arr[k]; };
+    const used = new Set();
+    const name = who || '얘';
+    const comments = [0, 1, 2].map(() => pick(COMMU_COMMENTS, used).replace('{who}', name));
+    return { title: COMMU_TITLES[Math.floor(r() * COMMU_TITLES.length)], comments };
+}
 
 const STOPWORDS = new Set(('그리고 그런데 하지만 그래서 그러나 그러면 그렇게 이렇게 저렇게 그냥 정말 너무 조금 아주 다시 지금 이제 여기 거기 저기 ' +
     '그는 그녀 그녀는 그녀의 그의 그가 그녀가 나는 내가 너는 네가 우리 우리는 당신 당신은 당신의 자신 자신의 ' +
@@ -153,12 +185,12 @@ function hasChat() {
 /** Per-chat storage (chatMetadata). Never cache the returned object across chats. */
 function data() {
     const meta = ctx().chatMetadata;
-    if (!meta) return { bookmarks: [], notes: [], chapters: [], scrapbooks: [], review: { rating: 0, text: '' } };
+    if (!meta) return { bookmarks: [], notes: [], chapters: [], scrapbooks: [], trash: [], review: { rating: 0, text: '' } };
     if (!meta[META_KEY] || typeof meta[META_KEY] !== 'object') {
         meta[META_KEY] = { v: 1, bookmarks: [], notes: [], chapters: [] };
     }
     const d = meta[META_KEY];
-    for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks']) if (!Array.isArray(d[k])) d[k] = [];
+    for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks', 'trash']) if (!Array.isArray(d[k])) d[k] = [];
     if (!d.review || typeof d.review !== 'object') d.review = { rating: 0, text: '' };
     return d;
 }
@@ -454,7 +486,7 @@ async function toggleBookmark(i, askLabel = true) {
     const existing = bookmarkAt(i);
     if (existing) {
         d.bookmarks = d.bookmarks.filter(b => b !== existing);
-        toastr.info('책갈피를 뺐어요.');
+        toTrash('bookmark', existing);
     } else {
         let label = '';
         if (askLabel) {
@@ -494,9 +526,8 @@ async function deleteChapter(id) {
     const d = data();
     const c = d.chapters.find(x => x.id === id);
     if (!c) return;
-    const ok = await ctx().Popup.show.confirm('챕터 삭제', `"${esc(c.title)}" 챕터 구분을 지울까요? (메시지는 지워지지 않아요)`);
-    if (!ok) return;
     d.chapters = d.chapters.filter(x => x !== c);
+    toTrash('chapter', c);
     persist();
     decorateChapters();
     refreshPanel();
@@ -525,21 +556,182 @@ function updateNote(id, patch) {
     refreshPanel();
 }
 
-async function deleteNote(id, confirm = true) {
+async function deleteNote(id) {
     const n = getNote(id);
     if (!n) return;
-    if (confirm && n.memo) {
-        const ok = await ctx().Popup.show.confirm('노트 삭제', '메모가 있는 노트예요. 지울까요?');
-        if (!ok) return;
-    }
     const d = data();
     d.notes = d.notes.filter(x => x !== n);
+    const inScraps = d.scrapbooks.filter(sb => sb.noteIds.includes(id)).map(sb => sb.id);
     for (const sb of d.scrapbooks) sb.noteIds = sb.noteIds.filter(x => x !== id);
+    toTrash('note', n, { scraps: inScraps });
     ui.selected.delete(id);
     staleNotes.delete(id);
     persist();
     decorateMessage(n.mesId);
     refreshPanel();
+}
+
+
+// ---------------------------------------------------------------- 여우의 보관함 (trash)
+// Deleted bookmarks / notes / chapters / scrapbooks wait here until they are restored or erased for good.
+
+const TRASH_MAX = 300;
+const TRASH_KIND = {
+    note: { name: '독서노트', obj: '독서노트를', ic: 'fa-highlighter', list: 'notes' },
+    bookmark: { name: '책갈피', obj: '책갈피를', ic: 'fa-bookmark', list: 'bookmarks' },
+    chapter: { name: '챕터', obj: '챕터를', ic: 'fa-book-open', list: 'chapters' },
+    scrap: { name: '스크랩북', obj: '스크랩북을', ic: 'fa-book-bookmark', list: 'scrapbooks' },
+};
+
+function toTrash(kind, item, extra = {}) {
+    const d = data();
+    const t = { id: uid(), kind, item, deleted: Date.now(), ...extra };
+    d.trash.unshift(t);
+    if (d.trash.length > TRASH_MAX) d.trash.length = TRASH_MAX;
+    persist();
+    toastr.info(`🦊 ${TRASH_KIND[kind].obj} 여우의 보관함에 넣었어요. <u>눌러서 되돌리기</u>`, '', {
+        escapeHtml: false,
+        timeOut: 4500,
+        onclick: () => restoreTrash(t.id),
+    });
+    updateTrashBadge();
+    return t;
+}
+
+/** Put a trashed item back. Returns false when its place is already taken. */
+function restoreTrash(id, quiet = false) {
+    const d = data();
+    const t = d.trash.find(x => x.id === id);
+    if (!t) return false;
+    const kind = TRASH_KIND[t.kind];
+    const list = d[kind.list];
+    const it = t.item;
+    if (list.some(x => x.id === it.id)) { d.trash = d.trash.filter(x => x !== t); persist(); refreshPanel(); return true; }
+    if (t.kind === 'bookmark' && list.some(x => x.mesId === it.mesId && (!it.sig || x.sig === it.sig))) {
+        if (!quiet) toastr.warning('그 메시지엔 이미 책갈피가 꽂혀 있어요.');
+        return false;
+    }
+    if (t.kind === 'chapter' && list.some(x => x.mesId === it.mesId)) {
+        if (!quiet) toastr.warning('그 메시지에서 이미 다른 챕터가 시작돼요.');
+        return false;
+    }
+    list.push(it);
+    if (t.kind === 'note') {
+        for (const sbId of t.scraps || []) {
+            // the scrapbook may itself be in the trash — put the note back into that copy too
+            const sb = getScrap(sbId) || d.trash.find(x => x.kind === 'scrap' && x.item.id === sbId)?.item;
+            if (sb && !(sb.noteIds ||= []).includes(it.id)) sb.noteIds.push(it.id);
+        }
+    }
+    if (t.kind === 'scrap') it.noteIds = (it.noteIds || []).filter(nid => d.notes.some(n => n.id === nid) || d.trash.some(x => x.kind === 'note' && x.item.id === nid));
+    d.trash = d.trash.filter(x => x !== t);
+    reconcile();
+    persist();
+    if (t.kind === 'chapter') decorateChapters();
+    else if (t.kind !== 'scrap') decorateMessage(it.mesId);
+    if (!quiet) toastr.success(`🦊 ${kind.obj} 되돌렸어요.`);
+    updateTrashBadge();
+    refreshPanel();
+    return true;
+}
+
+async function eraseTrash(id) {
+    const d = data();
+    const t = d.trash.find(x => x.id === id);
+    if (!t) return;
+    const ok = await ctx().Popup.show.confirm('영구 삭제', '여우의 보관함에서도 지울까요? 이건 되돌릴 수 없어요.');
+    if (!ok) return;
+    d.trash = d.trash.filter(x => x !== t);
+    if (t.kind === 'note') for (const x of d.trash) if (x.kind === 'scrap') x.item.noteIds = (x.item.noteIds || []).filter(n => n !== t.item.id);
+    persist();
+    updateTrashBadge();
+    refreshPanel();
+}
+
+async function emptyTrash() {
+    const d = data();
+    if (!d.trash.length) return;
+    const ok = await ctx().Popup.show.confirm('보관함 비우기', `보관함의 ${d.trash.length}개를 모두 영구 삭제할까요? 이건 되돌릴 수 없어요.`);
+    if (!ok) return;
+    d.trash = [];
+    persist();
+    updateTrashBadge();
+    refreshPanel();
+}
+
+function restoreAllTrash() {
+    const d = data();
+    // scrapbooks last, so their notes are back first; oldest first keeps the original order
+    const order = [...d.trash].reverse().sort((a, b) => (a.kind === 'scrap') - (b.kind === 'scrap'));
+    let ok = 0, fail = 0;
+    for (const t of order) { if (restoreTrash(t.id, true)) ok++; else fail++; }
+    decorateAll();
+    toastr.success(`🦊 ${ok}개를 되돌렸어요.${fail ? ` (${fail}개는 자리가 겹쳐서 남겨 뒀어요)` : ''}`);
+    refreshPanel();
+}
+
+function updateTrashBadge() {
+    const b = $id('stbs-trash-count');
+    if (!b) return;
+    const n = hasChat() ? data().trash.length : 0;
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.hidden = !n;
+}
+
+function trashPreview(t) {
+    const it = t.item;
+    switch (t.kind) {
+        case 'note': {
+            const q = it.start != null ? (it.text || it.quote) : plain(msg(it.mesId)?.mes);
+            return { title: clip(q, 90), sub: it.memo ? `✎ ${clip(it.memo, 60)}` : '', meta: `#${it.mesId}`, color: it.color };
+        }
+        case 'bookmark': return { title: it.label || clip(plain(msg(it.mesId)?.mes), 50), sub: it.label ? clip(plain(msg(it.mesId)?.mes), 70) : '', meta: `#${it.mesId}` };
+        case 'chapter': return { title: it.title, sub: it.review ? `“${clip(it.review, 50)}”` : '', meta: `#${it.mesId}부터` };
+        case 'scrap': return { title: `${it.emoji || '📒'} ${it.name}`, sub: '', meta: `노트 ${(it.noteIds || []).length}개` };
+    }
+    return { title: '', sub: '', meta: '' };
+}
+
+function renderTrash() {
+    const d = data();
+    const s = settings();
+    let html = `
+        <div class="stbs-trash-head">
+            <div class="stbs-icon-btn fa-solid fa-chevron-left" data-act="trash-back" title="돌아가기"></div>
+            <span class="stbs-avatar">${FOX_SVG}</span>
+            <div class="stbs-grow"><div class="stbs-scrap-title">여우의 보관함</div><div class="stbs-meta">지운 것들은 영구 삭제 전까지 여기 있어요</div></div>
+        </div>`;
+    if (!d.trash.length) return html + emptyState('보관함이 텅 비었어요', '책갈피·노트·챕터·스크랩북을 지우면<br>여우가 여기에 고이 넣어 둬요.');
+    const f = ui.trashFilter;
+    const counts = {};
+    for (const t of d.trash) counts[t.kind] = (counts[t.kind] || 0) + 1;
+    const chip = (key, label) => `<div class="stbs-chip ${f === key ? 'active' : ''}" data-act="trash-filter" data-f="${key}">${label}</div>`;
+    html += `<div class="stbs-row stbs-wrap">${chip('all', `전체 ${d.trash.length}`)}${Object.entries(TRASH_KIND).map(([k, v]) => counts[k] ? chip(k, `${v.name} ${counts[k]}`) : '').join('')}</div>
+        <div class="stbs-row stbs-trash-tools">
+            <div class="stbs-btn" data-act="trash-restore-all"><i class="fa-solid fa-rotate-left"></i> 모두 되돌리기</div>
+            <div class="stbs-btn stbs-danger" data-act="trash-empty"><i class="fa-solid fa-fire"></i> 보관함 비우기</div>
+        </div>`;
+    const list = d.trash.filter(t => f === 'all' || t.kind === f);
+    if (!list.length) return html + emptyState('이 종류는 비어 있어요', '', false);
+    html += list.map(t => {
+        const k = TRASH_KIND[t.kind];
+        const p = trashPreview(t);
+        const bar = p.color != null ? `style="--bar:${esc(s.colors[p.color])}"` : '';
+        return `
+        <div class="stbs-trash-item ${p.color != null ? 'colored' : ''}" ${bar}>
+            <span class="stbs-trash-kind"><i class="fa-solid ${k.ic}"></i>${k.name}</span>
+            <div class="stbs-trash-title">${esc(p.title)}</div>
+            ${p.sub ? `<div class="stbs-snippet">${esc(p.sub)}</div>` : ''}
+            <div class="stbs-note-foot">
+                <div class="stbs-meta">${esc(p.meta)} · ${fmtDate(t.deleted)} 지움</div>
+                <div class="stbs-actions">
+                    <div class="stbs-btn stbs-mini-btn" data-act="trash-restore" data-id="${t.id}"><i class="fa-solid fa-rotate-left"></i> 되돌리기</div>
+                    <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="trash-erase" data-id="${t.id}" title="영구 삭제"></div>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+    return html;
 }
 
 // ---------------------------------------------------------------- modal
@@ -826,8 +1018,207 @@ function layoutBlock(g, text, font, maxW) {
     return wrapLines(g, text, maxW);
 }
 
-function drawCard(canvas, { text, trans = '', transFirst = false, who, chapter, source }, themeKey) {
+function rrect(g, x, y, w, h, r) {
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, w, h, r);
+    else { g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+}
+
+function fitText(g, s, maxW) {
+    s = String(s || '');
+    if (g.measureText(s).width <= maxW) return s;
+    while (s.length && g.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+    return s + '…';
+}
+
+const kNum = (n) => n >= 10000 ? `${(n / 10000).toFixed(1).replace(/\.0$/, '')}만` : n.toLocaleString();
+
+/** Community theme: the quote as a hot post on an invented board, with upvotes and reactions. */
+function drawCommunity(canvas, { text, trans = '', transFirst = false, who, chapter, commu = {} }, t) {
+    const W = 1080, H = 1350;
+    canvas.width = W;
+    canvas.height = H;
+    const g = canvas.getContext('2d');
+    const read = `${pageFonts().readFont}, sans-serif`;
+    const ui = `${pageFonts().uiFont}, sans-serif`;
+    const r = seeded(commu.seed || 1);
+    const views = 3000 + Math.floor(r() * 42000), ups = 180 + Math.floor(r() * 2400), downs = Math.floor(r() * 9);
+    const cmCount = 24 + Math.floor(r() * 180);
+
+    g.fillStyle = t.bg[0];
+    g.fillRect(0, 0, W, H);
+    const X = 44, Y = 44, CW = W - 88, CH = H - 88, IN = 56;
+    g.fillStyle = t.card;
+    rrect(g, X, Y, CW, CH, 34); g.fill();
+    g.textBaseline = 'middle';
+
+    // board header
+    g.fillStyle = t.accent;
+    rrect(g, X + IN, Y + 44, 22, 22, 6); g.fill();
+    g.fillStyle = t.fg;
+    g.font = `bold 30px ${ui}`;
+    g.fillText('여우굴 · 명대사 게시판', X + IN + 36, Y + 56);
+    g.font = `bold 24px ${ui}`;
+    const hot = '실시간 베스트';
+    const hw = g.measureText(hot).width + 36;
+    g.fillStyle = t.soft;
+    rrect(g, X + CW - IN - hw, Y + 34, hw, 44, 22); g.fill();
+    g.fillStyle = t.accent;
+    g.fillText(hot, X + CW - IN - hw + 18, Y + 57);
+    g.fillStyle = t.line;
+    g.fillRect(X + IN, Y + 108, CW - IN * 2, 2);
+
+    // title
+    g.fillStyle = t.fg;
+    g.font = `bold 46px ${ui}`;
+    const title = commu.title || '이 대사 뭐냐 진짜';
+    g.fillText(fitText(g, `[명대사] ${title}`, CW - IN * 2), X + IN, Y + 172);
+
+    // author row
+    const ay = Y + 252, ax = X + IN + 32;
+    g.fillStyle = t.soft;
+    g.beginPath(); g.arc(ax, ay, 32, 0, Math.PI * 2); g.fill();
+    if (settings().cardFox && foxImage?.complete && foxImage.naturalWidth) g.drawImage(foxImage, ax - 27, ay - 26, 54, 54);
+    g.fillStyle = t.fg;
+    g.font = `bold 28px ${ui}`;
+    g.fillText(commu.nick || '익명의 여우', ax + 50, ay - 15);
+    g.fillStyle = t.sub;
+    g.font = `24px ${ui}`;
+    g.fillText(`조회 ${kNum(views)}  ·  추천 ${kNum(ups)}  ·  댓글 ${cmCount}  ·  방금 전`, ax + 50, ay + 19);
+
+    // comments block (measured first, laid out from the bottom)
+    const comments = (commu.comments || []).map(c => String(c).trim()).filter(Boolean).slice(0, 4);
+    const cmW = CW - IN * 2 - 10;
+    g.font = `30px ${ui}`;
+    const nickBase = Math.floor(r() * (COMMU_NICKS.length - 1));
+    const cms = comments.map((c, k) => {
+        const lines = wrapLines(g, c, cmW).filter(l => l !== '').slice(0, 2);
+        return { lines, nick: COMMU_NICKS[1 + (nickBase + k) % (COMMU_NICKS.length - 1)], likes: Math.max(3, Math.floor(ups * (0.5 - k * 0.12) * (0.6 + r() * 0.5))) };
+    });
+    const main = String(text || '').trim(), sub = String(trans || '').trim();
+    const blocks = sub ? (transFirst ? [[sub, 1], [main, 0.76]] : [[main, 1], [sub, 0.76]]) : [[main, 1]];
+    const DIV = 44, PARA = 0.55;
+    const tx = X + IN + 52, maxW = CW - IN * 2 - 96;
+    const footH = (who || chapter) ? 64 : 0;
+    const measure = (size) => {
+        let total = sub ? DIV : 0;
+        const laid = blocks.map(([txt, sc]) => {
+            const fs = Math.round(size * sc), lh = fs * 1.55;
+            const lines = layoutBlock(g, txt, `${sc < 1 ? '' : '600 '}${fs}px ${read}`, maxW);
+            const h = lines.reduce((a, l) => a + (l === '' ? lh * PARA : lh), 0);
+            total += h;
+            return { lines, fs, lh, h, sc };
+        });
+        return { laid, total };
+    };
+    // The quote comes first: comments step aside (fewer of them) until it fits at a readable size.
+    const geom = (n) => {
+        const cmH = cms.slice(0, n).reduce((a, c) => a + 46 + c.lines.length * 42 + 26, 0);
+        const listTop = Y + CH - 40 - (n ? 66 + cmH : 0);
+        const rowY = listTop - (n ? 70 : 90);
+        const boxTop = ay + 62, boxBottom = rowY - 64;
+        const areaTop = boxTop + 44;
+        return { listTop, rowY, boxTop, boxBottom, areaTop, avail: boxBottom - 40 - footH - areaTop };
+    };
+    let nCm = cms.length, G = geom(nCm);
+    while (nCm > 1 && measure(34).total > G.avail) G = geom(--nCm);
+    cms.length = nCm;
+    const { listTop, rowY, boxTop, boxBottom, areaTop, avail } = G;
+
+    // quote box
+    g.fillStyle = t.box;
+    rrect(g, X + IN, boxTop, CW - IN * 2, boxBottom - boxTop, 26); g.fill();
+    g.fillStyle = t.accent;
+    rrect(g, X + IN, boxTop + 30, 8, boxBottom - boxTop - 60, 4); g.fill();
+    let size = 52, m;
+    for (; size >= 22; size -= 2) { m = measure(size); if (m.total <= avail) break; }
+    if (m.total > avail) {
+        const room = avail - (sub ? DIV : 0);
+        for (const b of m.laid) {
+            const share = room * (b.h / Math.max(1, m.total - (sub ? DIV : 0)));
+            let h = 0; const keep = [];
+            for (const l of b.lines) { const lh = l === '' ? b.lh * PARA : b.lh; if (h + lh > share && keep.length) break; keep.push(l); h += lh; }
+            while (keep.length && keep[keep.length - 1] === '') { keep.pop(); h -= b.lh * PARA; }
+            if (keep.length < b.lines.length && keep.length) keep[keep.length - 1] = keep[keep.length - 1].replace(/.?$/, '…');
+            b.lines = keep; b.h = h;
+        }
+        m.total = m.laid.reduce((a, b) => a + b.h, sub ? DIV : 0);
+    }
+    let y = areaTop + Math.max(0, (avail - m.total) / 2);
+    g.textBaseline = 'alphabetic';
+    m.laid.forEach((b, k) => {
+        g.font = `${b.sc < 1 ? '' : '600 '}${b.fs}px ${read}`;
+        g.fillStyle = b.sc < 1 ? t.sub : t.fg;
+        for (const l of b.lines) {
+            if (l === '') { y += b.lh * PARA; continue; }
+            g.fillText(l, tx, y + b.fs);
+            y += b.lh;
+        }
+        if (sub && k === 0) { g.fillStyle = t.line; g.fillRect(tx, y + DIV / 2 - 1, 60, 3); y += DIV; }
+    });
+    if (footH) {
+        g.fillStyle = t.sub;
+        g.font = `bold 26px ${ui}`;
+        g.fillText(fitText(g, [who && `— ${who}`, chapter].filter(Boolean).join('  ·  '), maxW), tx, boxBottom - 40);
+    }
+
+    // up / down
+    g.textBaseline = 'middle';
+    g.font = `bold 30px ${ui}`;
+    const upT = `▲ 추천 ${kNum(ups)}`, dnT = `▼ ${downs}`;
+    const uw = g.measureText(upT).width + 64, dw = g.measureText(dnT).width + 56, gap = 18;
+    const bx = X + (CW - uw - dw - gap) / 2;
+    g.fillStyle = t.up;
+    rrect(g, bx, rowY - 38, uw, 76, 38); g.fill();
+    g.fillStyle = '#ffffff';
+    g.fillText(upT, bx + 32, rowY + 1);
+    g.strokeStyle = t.line; g.lineWidth = 3;
+    rrect(g, bx + uw + gap, rowY - 36, dw, 72, 36); g.stroke();
+    g.fillStyle = t.sub;
+    g.fillText(dnT, bx + uw + gap + 28, rowY + 1);
+
+    // comments
+    if (cms.length) {
+        let cy = listTop;
+        g.fillStyle = t.line;
+        g.fillRect(X + IN, cy, CW - IN * 2, 2);
+        g.fillStyle = t.fg;
+        g.font = `bold 28px ${ui}`;
+        g.fillText(`댓글 ${cmCount}`, X + IN, cy + 38);
+        cy += 66;
+        cms.forEach((c, k) => {
+            const best = k === 0;
+            const h = 46 + c.lines.length * 42 + 10;
+            if (best) { g.fillStyle = t.best; rrect(g, X + IN - 16, cy - 6, CW - IN * 2 + 32, h + 6, 18); g.fill(); }
+            let nx = X + IN + 4;
+            if (best) {
+                g.font = `bold 20px ${ui}`;
+                const bw = g.measureText('BEST').width + 20;
+                g.fillStyle = t.accent;
+                rrect(g, nx, cy + 6, bw, 30, 9); g.fill();
+                g.fillStyle = '#ffffff';
+                g.fillText('BEST', nx + 10, cy + 22);
+                nx += bw + 12;
+            }
+            g.fillStyle = t.sub;
+            g.font = `bold 24px ${ui}`;
+            g.fillText(c.nick, nx, cy + 22);
+            g.font = `24px ${ui}`;
+            const lk = `♥ ${kNum(c.likes)}`;
+            g.fillStyle = best ? t.accent : t.sub;
+            g.fillText(lk, X + CW - IN - g.measureText(lk).width, cy + 22);
+            g.fillStyle = t.fg;
+            g.font = `30px ${ui}`;
+            c.lines.forEach((l, j) => g.fillText(l, X + IN + 4, cy + 46 + 21 + j * 42));
+            cy += h + 16;
+        });
+    }
+}
+
+function drawCard(canvas, info, themeKey) {
     const t = CARD_THEMES[themeKey] || CARD_THEMES.paper;
+    if (t.commu) return drawCommunity(canvas, info, t);
+    const { text, trans = '', transFirst = false, who, chapter, source } = info;
     const W = 1080, H = 1350, PAD = 110;
     canvas.width = W;
     canvas.height = H;
@@ -979,7 +1370,15 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         </div>
         <textarea id="stbs-card-trans" class="text_pole stbs-textarea stbs-trans" rows="3" placeholder="번역 문장을 적으면 카드에 작게 함께 들어가요">${esc(trans)}</textarea>
         ${alt ? `<div class="stbs-row stbs-wrap"><div class="stbs-chip" data-alt title="이 메시지의 다른 언어 전체를 넣어요. 필요한 부분만 남기세요."><i class="fa-solid fa-language"></i> 메시지의 다른 언어 불러오기</div></div>` : ''}
-        <label class="checkbox_label stbs-inline"><input type="checkbox" id="stbs-card-fox" ${s.cardFox ? 'checked' : ''}> <span>여우 도장 찍기</span></label>
+        <div class="stbs-commu-box" id="stbs-commu-box" ${CARD_THEMES[s.cardTheme]?.commu ? '' : 'hidden'}>
+            <div class="stbs-row stbs-between stbs-wrap">
+                <label class="stbs-label">커뮤 반응 <span class="stbs-dim">· 글 제목과 댓글 (한 줄에 하나, 4개까지)</span></label>
+                <div class="stbs-chip" data-reroll title="제목·댓글·숫자를 새로 뽑아요"><i class="fa-solid fa-dice"></i> 다시 뽑기</div>
+            </div>
+            <input id="stbs-commu-title" class="text_pole" maxlength="40" placeholder="글 제목">
+            <textarea id="stbs-commu-cm" class="text_pole stbs-textarea" rows="3" placeholder="댓글 반응을 한 줄에 하나씩"></textarea>
+        </div>
+        <label class="checkbox_label stbs-inline"><input type="checkbox" id="stbs-card-fox" ${s.cardFox ? 'checked' : ''}> <span>여우 도장 찍기 <span class="stbs-dim">(커뮤 테마는 프로필 사진)</span></span></label>
         <div class="stbs-row">
             <input id="stbs-card-who" class="text_pole" placeholder="화자" value="${esc(info.who)}">
             <input id="stbs-card-ch" class="text_pole" placeholder="챕터/출처" value="${esc(info.chapter)}">
@@ -992,6 +1391,14 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
     const ta = body.querySelector('#stbs-card-text');
     const tr = body.querySelector('#stbs-card-trans');
     let theme = s.cardTheme;
+    const cTitle = body.querySelector('#stbs-commu-title');
+    const cCm = body.querySelector('#stbs-commu-cm');
+    let seed = parseInt(hash(String(text || '')).slice(0, 6), 36) || 7;
+    const fillCommu = () => {
+        const dflt = commuDefaults(seed, body.querySelector('#stbs-card-who').value.trim());
+        cTitle.value = dflt.title;
+        cCm.value = dflt.comments.join('\n');
+    };
     const redraw = () => drawCard(canvas, {
         text: ta.value,
         trans: tr.value,
@@ -999,6 +1406,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         who: body.querySelector('#stbs-card-who').value.trim(),
         chapter: body.querySelector('#stbs-card-ch').value.trim(),
         source: '',
+        commu: { seed, title: cTitle.value.trim(), comments: cCm.value.split('\n') },
     }, theme);
     const redrawSoon = debounce(redraw, 150);
     // keep a note's translation so the next card (and the notes list / export) has it too
@@ -1016,6 +1424,13 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
             s.cardTheme = theme;
             saveSettings();
             body.querySelectorAll('[data-theme]').forEach(x => x.classList.toggle('active', x === chip));
+            body.querySelector('#stbs-commu-box').hidden = !CARD_THEMES[theme]?.commu;
+            redraw();
+            return;
+        }
+        if (e.target.closest('[data-reroll]')) {
+            seed = Math.floor(Math.random() * 1e9);
+            fillCommu();
             redraw();
             return;
         }
@@ -1055,6 +1470,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
             }
         }, 'image/png');
     });
+    fillCommu();
     Promise.all([
         loadFoxImage(),
         document.fonts?.ready?.catch?.(() => { }),
@@ -1082,6 +1498,8 @@ const ui = {
     scrap: null,          // open scrapbook id in the notes tab
     selecting: false,     // multi-select mode in the notes tab
     selected: new Set(),
+    trashFilter: 'all',
+    prevTab: 'notes',
 };
 
 // ---------------------------------------------------------------- rating & one-line review
@@ -1240,10 +1658,9 @@ function openScrapPicker(noteIds) {
 async function deleteScrap(id) {
     const sb = getScrap(id);
     if (!sb) return;
-    const ok = await ctx().Popup.show.confirm('스크랩북 삭제', `"${esc(sb.name)}" 스크랩북을 지울까요? (안에 든 노트는 그대로 남아요)`);
-    if (!ok) return;
     const d = data();
     d.scrapbooks = d.scrapbooks.filter(x => x !== sb);
+    toTrash('scrap', sb);
     ui.scrap = null;
     persist();
     refreshPanel();
@@ -1304,6 +1721,7 @@ function buildPanel() {
         <div class="stbs-head" data-drag="move">
             <div class="stbs-icon-btn stbs-back fa-solid fa-chevron-left" data-act="close" title="채팅으로 돌아가기"></div>
             <div class="stbs-title"><span class="stbs-avatar">${FOX_SVG}</span><div class="stbs-title-text"><b>${APP_NAME}</b><span class="stbs-sub" id="stbs-chatname"></span></div></div>
+            <div class="stbs-icon-btn stbs-trash-btn fa-solid fa-box-archive" data-act="trash" title="여우의 보관함 (지운 것들)"><span id="stbs-trash-count" class="stbs-count-badge" hidden></span></div>
             <div class="stbs-icon-btn fa-solid fa-file-export" data-act="export" title="내보내기 / 불러오기"></div>
             <div class="stbs-icon-btn stbs-x fa-solid fa-xmark" data-act="close" title="닫기"></div>
         </div>
@@ -1402,7 +1820,7 @@ function onPanelPointerDown(e) {
 function openPanel(tab) {
     if (!settings().enabled) { toastr.info(`${APP_NAME} 확장이 꺼져 있어요. 확장 설정에서 켜주세요.`); return; }
     buildPanel();
-    if (tab && TABS.some(t => t[0] === tab)) ui.tab = tab;
+    if (tab && (TABS.some(t => t[0] === tab) || tab === 'trash')) ui.tab = tab;
     const p = $id('stbs-panel');
     placePanel();
     applyGeometry();
@@ -1491,7 +1909,9 @@ function renderPanel() {
     if (!hasChat()) { body.innerHTML = emptyState('아직 펼친 책이 없어요', '채팅을 열면 여우가 함께 읽기 시작해요.'); return; }
     const scroll = body.scrollTop;
     const keepFocus = document.activeElement?.id === 'stbs-q';
-    body.innerHTML = ({ toc: renderToc, bookmarks: renderBookmarks, notes: renderNotes, search: renderSearch, stats: renderStats }[ui.tab])();
+    updateTrashBadge();
+    $id('stbs-panel')?.classList.toggle('in-trash', ui.tab === 'trash');
+    body.innerHTML = ({ toc: renderToc, bookmarks: renderBookmarks, notes: renderNotes, search: renderSearch, stats: renderStats, trash: renderTrash }[ui.tab] || renderNotes)();
     body.scrollTop = scroll;
     if (ui.tab === 'search') {
         const q = $id('stbs-q');
@@ -1862,6 +2282,13 @@ async function onPanelClick(e) {
         switch (act.dataset.act) {
             case 'close': closePanel(); break;
             case 'export': openExport(); break;
+            case 'trash': if (ui.tab !== 'trash') { ui.prevTab = ui.tab; ui.tab = 'trash'; endSelecting(); } else ui.tab = ui.prevTab || 'notes'; renderPanel(); $id('stbs-body').scrollTop = 0; break;
+            case 'trash-back': ui.tab = ui.prevTab || 'notes'; renderPanel(); break;
+            case 'trash-filter': ui.trashFilter = act.dataset.f; renderPanel(); break;
+            case 'trash-restore': restoreTrash(id); break;
+            case 'trash-erase': await eraseTrash(id); break;
+            case 'trash-empty': await emptyTrash(); break;
+            case 'trash-restore-all': restoreAllTrash(); break;
             case 'chapter-last': {
                 const len = ctx().chat.length;
                 if (len) await addChapter(len - 1);
@@ -2015,11 +2442,11 @@ function openExport() {
             const d = data();
             let added = 0;
             if (json.data.review && !(d.review.rating || d.review.text)) d.review = { ...json.data.review };
-            for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks']) {
+            for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks', 'trash']) {
                 const have = new Set(d[k].map(x => x.id));
                 for (const item of json.data[k] || []) {
                     if (!item || have.has(item.id)) continue;
-                    if (k === 'scrapbooks' ? !Array.isArray(item.noteIds) : typeof item.mesId !== 'number') continue;
+                    if (k === 'trash' ? !(item.item && TRASH_KIND[item.kind]) : k === 'scrapbooks' ? !Array.isArray(item.noteIds) : typeof item.mesId !== 'number') continue;
                     d[k].push(item);
                     added++;
                 }
@@ -2135,10 +2562,10 @@ function registerCommands() {
             callback: (_args, value) => { openPanel(String(value ?? '').trim() || undefined); return ''; },
             returns: 'nothing',
             unnamedArgumentList: [SlashCommandArgument.fromProps({
-                description: 'tab: toc | bookmarks | notes | search | stats',
+                description: 'tab: toc | bookmarks | notes | search | stats | trash',
                 typeList: [ARGUMENT_TYPE.STRING],
                 isRequired: false,
-                enumList: TABS.map(t => t[0]),
+                enumList: [...TABS.map(t => t[0]), 'trash'],
             })],
             helpString: '<div>책 먹는 여우 독서 패널을 엽니다. 예: <code>/bookfox notes</code></div>',
         }));

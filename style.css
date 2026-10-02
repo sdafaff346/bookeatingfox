@@ -155,10 +155,15 @@
     text-decoration-thickness: 1.5px !important;
     text-underline-offset: 4px !important;
 }
-/* memo dot: painted into the highlight's own background (top-right of its last line) —
-   no pseudo-element box, so line breaking is never affected */
+/* memo mark: a dotted underline under the highlight instead of a dot in its corner — the dot sat on
+   top of closing quotes (” " 」). Text decoration takes no space, so line breaking never changes,
+   and skip-ink keeps it off descenders. */
 #chat .mes .mes_text mark.stbs-hl.stbs-has-memo {
-    --stbs-hl-dot: radial-gradient(circle at calc(100% - 2px) 3px, var(--stbs-fox) 2.4px, transparent 3px);
+    --stbs-hl-dot: linear-gradient(transparent, transparent);
+    text-decoration: underline dotted var(--stbs-fox) !important;
+    text-decoration-thickness: 2px !important;
+    text-underline-offset: 3px !important;
+    text-decoration-skip-ink: auto !important;
 }
 
 /* Bookmark ribbon sits right after the speaker's name, so it never covers message buttons
@@ -1069,3 +1074,54 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent-i
 #stbs-modal .stbs-label .stbs-dim { font-weight: 500; }
 #stbs-modal .stbs-hint { margin-top: -6px; font-size: calc(var(--stbs-fs, 14px) * 11.5 / 14); }
 #stbs-modal .stbs-textarea.stbs-trans { min-height: 72px; }
+
+/* ================= 여우의 보관함 (trash) ================= */
+.stbs-trash-btn { position: relative; }
+.stbs-count-badge {
+    position: absolute; top: 2px; right: 1px;
+    min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box;
+    border-radius: 99px; background: var(--stbs-accent); color: var(--stbs-on-accent, #fff);
+    font-family: var(--stbs-ui-font, inherit); font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+    pointer-events: none;
+}
+.stbs-count-badge[hidden] { display: none; }
+#stbs-panel.in-trash .stbs-trash-btn { background: var(--stbs-accent-soft); color: var(--stbs-accent-ink); }
+.stbs-trash-head { display: flex; align-items: center; gap: 9px; padding: 4px 0 10px; border-bottom: 1px solid var(--stbs-line); }
+.stbs-trash-head .stbs-avatar { flex-shrink: 0; }
+.stbs-trash-tools { flex-wrap: wrap; }
+.stbs-trash-tools .stbs-btn { flex: 1; }
+:is(#stbs-panel, #stbs-modal) .stbs-danger { color: #d9534f; }
+:is(#stbs-panel, #stbs-modal) .stbs-danger i { color: inherit; }
+:is(#stbs-panel, #stbs-modal) .stbs-danger:hover { border-color: #e7a19f; background: color-mix(in srgb, #d9534f 10%, var(--stbs-surface2)); }
+.stbs-trash-item {
+    --bar: var(--stbs-line2);
+    position: relative;
+    padding: 12px 13px 9px 22px;
+    border-radius: 16px;
+    background: var(--stbs-surface);
+    border: 1px dashed var(--stbs-line2);
+    opacity: .92;
+}
+.stbs-trash-item::before {
+    content: ""; position: absolute; left: 10px; top: 14px; bottom: 14px; width: 4px; border-radius: 4px;
+    background: var(--bar); opacity: .55;
+}
+.stbs-trash-item:hover { opacity: 1; border-style: solid; }
+.stbs-trash-kind {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: calc(var(--stbs-fs, 14px) * 10.5 / 14); font-weight: 700; color: var(--stbs-muted);
+    padding: 1px 8px; border-radius: 99px; background: var(--stbs-surface2);
+}
+.stbs-trash-kind i { font-size: .9em; color: var(--stbs-accent); }
+.stbs-trash-title {
+    margin-top: 6px;
+    font-family: var(--stbs-read-font, inherit);
+    font-size: var(--stbs-read-size, 15px);
+    line-height: 1.65; color: var(--stbs-fg2, var(--stbs-fg));
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+:is(#stbs-panel, #stbs-modal) .stbs-mini-btn { padding: 5px 10px; font-size: calc(var(--stbs-fs, 14px) * 12 / 14); border-radius: 10px; }
+.stbs-commu-box { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 14px; background: var(--stbs-surface2); }
+.stbs-commu-box[hidden] { display: none; }
+.stbs-trash-item .stbs-actions { align-items: center; gap: 4px; opacity: 1; margin: 0 -4px 0 0; }
