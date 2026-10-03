@@ -17,7 +17,8 @@ const DEFAULTS = Object.freeze({
     cardTheme: 'fox',
     cardFox: true,
     cardTransFirst: false,
-    searchHidden: 'all',      // search: 'all' (hidden + shown) | 'shown' | 'hidden'
+    searchHidden: 'all',
+    farReader: true,          // far-away (not yet drawn) messages open in a reading window first      // search: 'all' (hidden + shown) | 'shown' | 'hidden'
     panel: null,
     sheetH: 0.62,
 });
@@ -451,7 +452,18 @@ function decorateChapters() {
 
 function decorateAll() {
     decorateChapters();
-    document.querySelectorAll('#chat .mes[mesid]').forEach(el => decorateMessage(Number(el.getAttribute('mesid'))));
+    // Only messages that have (or had) highlights need the full text pass; the rest just get their
+    // buttons and ribbon. Loading hundreds of old messages at once stays light.
+    const s = settings();
+    const on = s.enabled && hasChat();
+    const withNotes = new Set(on ? data().notes.filter(n => n.start != null).map(n => n.mesId) : []);
+    const marked = new Set(on ? data().bookmarks.map(b => b.mesId) : []);
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => {
+        const i = Number(el.getAttribute('mesid'));
+        if (withNotes.has(i) || el.querySelector('mark.stbs-hl')) { decorateMessage(i); return; }
+        ensureMesButtons(el);
+        el.classList.toggle('stbs-bm', on && s.showRibbon && marked.has(i));
+    });
 }
 
 const MES_BUTTONS = `
@@ -468,7 +480,8 @@ function ensureMesButtons(root) {
 // ---------------------------------------------------------------- navigation
 
 let showMoreFn = null;
-import('../../../../script.js').then(m => { showMoreFn = m.showMoreMessages ?? null; }).catch(() => { });
+let stScript = null;
+import('../../../../script.js').then(m => { stScript = m; showMoreFn = m.showMoreMessages ?? null; }).catch(() => { });
 
 async function ensureRendered(i) {
     const sel = () => document.querySelector(`#chat .mes[mesid="${i}"]`);
@@ -477,7 +490,6 @@ async function ensureRendered(i) {
     if (showMoreFn) {
         const first = Number(document.querySelector('#chat .mes[mesid]')?.getAttribute('mesid'));
         if (Number.isFinite(first) && first > i) {
-            if (first - i > 150) toastr.info('🦊 앞쪽 페이지를 넘기는 중이에요…', '', { timeOut: 1600 });
             await nextFrame();
             try { await showMoreFn(first - i + 3); } catch { /* fall back to the loop below */ }
             if (sel()) return sel();
@@ -561,9 +573,12 @@ function scrollAndHold(resolve, { quiet = 2500, max = 20000 } = {}) {
     };
     for (const ev of ['wheel', 'touchstart', 'pointerdown']) chat.addEventListener(ev, stop, { passive: true });
     window.addEventListener('keydown', stop, true);
+    let lastCheck = 0;
     const tick = () => {
         if (done) return;
         const now = Date.now();
+        if (now - lastCheck < 90) { raf = requestAnimationFrame(tick); return; }
+        lastCheck = now;
         if (now - t0 > max || (now - lastChange > quiet && now - t0 > 1200)) { stop(); return; }
         if (!target?.isConnected) { target = resolve(); lastChange = now; }
         if (target) {
@@ -577,8 +592,24 @@ function scrollAndHold(resolve, { quiet = 2500, max = 20000 } = {}) {
     releaseHold = stop;
 }
 
+let jumpBusy = false;
+
+/** How many not-yet-drawn messages lie between the chat's first drawn message and i (0 = already drawn). */
+function missingBefore(i) {
+    if (document.querySelector(`#chat .mes[mesid="${i}"]`)) return 0;
+    const first = Number(document.querySelector('#chat .mes[mesid]')?.getAttribute('mesid'));
+    return Number.isFinite(first) && first > i ? first - i : 0;
+}
+
 async function jumpTo(i, noteId = null, query = '') {
-    const el = await ensureRendered(i);
+    if (jumpBusy) { toastr.info('🦊 아직 앞쪽 페이지를 넘기는 중이에요. 조금만 기다려 주세요.', '', { timeOut: 2000, preventDuplicates: true }); return; }
+    const missing = missingBefore(i);
+    let busyToast = null;
+    if (missing > 120) busyToast = toastr.info(`메시지 ${missing}개를 불러와서 그 위치로 가는 중이에요. 화면이 잠깐 멈춰도 기다려 주세요.`, '🦊 앞쪽 페이지를 넘기는 중…', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
+    jumpBusy = true;
+    if (busyToast) await sleep(80); // let the notice paint before the heavy loading freezes the screen
+    let el;
+    try { el = await ensureRendered(i); } finally { jumpBusy = false; if (busyToast) toastr.clear(busyToast); }
     if (!el) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
     decorateMessage(i);
     decorateChapters();
@@ -851,6 +882,84 @@ function renderTrash() {
         </div>`;
     }).join('');
     return html;
+}
+
+
+// ---------------------------------------------------------------- reader (far-away messages)
+// Jumping to a message hundreds of messages up means drawing all of them first, which can take many
+// seconds on a phone. For reading, show the message right away in a window instead.
+const READER_MIN_MISSING = 60;
+
+function highlightIn(root, phrase) {
+    const q = String(phrase || '').trim().toLowerCase();
+    if (!q) return null;
+    let first = null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    let node;
+    while ((node = walker.nextNode())) {
+        if (node.parentElement?.closest('style, script, mark')) continue;
+        const lower = node.data.toLowerCase();
+        let at = lower.indexOf(q);
+        while (at !== -1) { hits.push([node, at]); at = lower.indexOf(q, at + q.length); }
+    }
+    for (let k = hits.length - 1; k >= 0; k--) {
+        const [n, at] = hits[k];
+        const mid = n.splitText(at);
+        mid.splitText(q.length);
+        const mk = document.createElement('mark');
+        mk.className = 'stbs-find';
+        mid.replaceWith(mk);
+        mk.appendChild(mid);
+        first = mk;
+    }
+    return first;
+}
+
+function openReader(i, { noteId = null, query = '' } = {}) {
+    const m = msg(i);
+    if (!m) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
+    const note = noteId ? getNote(noteId) : null;
+    const phrase = note ? (noteText(note).split('\n').find(l => l.trim()) || '').slice(0, 60) : query;
+    let html = '';
+    try {
+        html = stScript?.messageFormatting
+            ? stScript.messageFormatting(m.mes, m.name, !!m.is_system, !!m.is_user, i)
+            : esc(plainKeep(m.mes)).replace(/\n/g, '<br>');
+    } catch { html = esc(plainKeep(m.mes)).replace(/\n/g, '<br>'); }
+    const ch = sortedChapters().length ? chapterLabel(chapterOf(i)) : '';
+    const badges = [isHiddenMes(m) ? '<span class="stbs-badge stbs-hid-badge"><i class="fa-solid fa-eye-slash"></i> 숨김</span>' : '',
+        isQrMes(m) ? `<span class="stbs-badge stbs-qr-badge"><i class="fa-solid fa-bolt"></i> ${m.extra.type === 'narrator' ? '내레이터' : 'QR·코멘트'}</span>` : ''].join('');
+    const body = openModal('🦊 미리 읽기', `
+        <div class="stbs-reader-meta">${badges}<span>${esc(speaker(i) || m.name || '')} · #${i}${ch ? ` · ${esc(ch)}` : ''}</span></div>
+        <div class="stbs-reader mes_text">${html}</div>
+        <div class="stbs-hint">채팅 앞쪽(#${i})에 있는 메시지라 바로 펼쳐 보여 드려요. 실제 위치로 가려면 아래 버튼을 누르세요.</div>
+        <div class="stbs-row stbs-end stbs-wrap">
+            <div class="stbs-btn" data-act="modal-close">닫기</div>
+            <div class="stbs-btn stbs-primary" id="stbs-reader-go"><i class="fa-solid fa-location-arrow"></i> 채팅에서 그 위치로 가기</div>
+        </div>`, { wide: true });
+    const box = body.querySelector('.stbs-reader');
+    // full-page HTML answers (frontend code blocks) → show them drawn, in a sandboxed frame (scripts run,
+    // but it can't touch SillyTavern), like Tavern Helper does in the chat
+    box.querySelectorAll('pre > code').forEach(code => {
+        const src = code.textContent || '';
+        if (!/^\s*(<!doctype html|<html[\s>])/i.test(src)) return;
+        const frame = document.createElement('iframe');
+        frame.className = 'stbs-reader-frame';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.setAttribute('loading', 'lazy');
+        frame.srcdoc = src;
+        code.parentElement.replaceWith(frame);
+    });
+    const hit = highlightIn(box, phrase);
+    if (hit) {
+        for (let d = hit.closest('details'); d; d = d.parentElement?.closest('details')) d.open = true;
+        setTimeout(() => hit.scrollIntoView({ block: 'center' }), 60);
+    }
+    body.querySelector('#stbs-reader-go').addEventListener('click', () => {
+        closeModal();
+        jumpTo(i, noteId, note ? '' : query);
+    });
 }
 
 // ---------------------------------------------------------------- modal
@@ -2491,7 +2600,11 @@ async function onPanelClick(e) {
         return;
     }
     const jump = e.target.closest('[data-jump]');
-    if (jump) jumpTo(Number(jump.dataset.jump), jump.dataset.note || null, ui.tab === 'search' ? ui.q : '');
+    if (jump) {
+        const i = Number(jump.dataset.jump), noteId = jump.dataset.note || null, q = ui.tab === 'search' ? ui.q : '';
+        if (settings().farReader && missingBefore(i) >= READER_MIN_MISSING && !jumpBusy) openReader(i, { noteId, query: q });
+        else jumpTo(i, noteId, q);
+    }
 }
 
 // ---------------------------------------------------------------- export / import
@@ -2632,6 +2745,7 @@ function buildSettingsUI() {
                 <label class="checkbox_label"><input type="checkbox" data-set="showMemoUnderline"> <span>메모만 단 문장에 점선 밑줄</span></label>
                 <label class="checkbox_label"><input type="checkbox" data-set="showChapters"> <span>채팅에 챕터 구분선 보이기</span></label>
                 <label class="checkbox_label"><input type="checkbox" data-set="showRibbon"> <span>책갈피 꽂은 메시지에 리본 표시</span></label>
+                <label class="checkbox_label"><input type="checkbox" data-set="farReader"> <span>멀리 있는 옛날 메시지는 미리 읽기 창으로 먼저 보기</span></label>
                 <div class="stbs-set-row"><span>패널 테마</span>
                     <select class="text_pole stbs-select" data-set-theme>${Object.entries(PANEL_THEMES).map(([k, v]) => `<option value="${k}" ${s.theme === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
                 </div>
