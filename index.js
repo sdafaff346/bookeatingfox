@@ -512,26 +512,44 @@ async function settle(el, max = 900) {
 }
 
 let releaseHold = null;
+
 /**
- * Scroll #chat so target sits at a fixed spot, then hold it there for a moment: content that is still
- * growing (frontend iframes inside an unfolded QR answer…) or other code scrolling the chat to the bottom
- * would otherwise pull the view away. Any wheel/touch/key input from the user releases the hold at once.
+ * The element to show for a jump, looked up fresh every time: other extensions (Tavern Helper…) may
+ * re-render a message after it appears, replacing its contents with a new, closed <details>.
  */
-function scrollAndHold(target, ms = 2500) {
+function jumpTarget(i, noteId, q) {
+    const el = document.querySelector(`#chat .mes[mesid="${i}"]`);
+    if (!el) return null;
+    if (noteId) return el.querySelector(`mark[data-note="${noteId}"]`) || el;
+    if (!q) return el;
+    // search hit inside a folded <details> (QR answers, collapsible replies) → unfold just that one
+    const folds = [...el.querySelectorAll('.mes_text details')].filter(d => d.textContent.toLowerCase().includes(q));
+    const inner = folds.find(d => !folds.some(o => o !== d && d.contains(o)));
+    if (!inner) return el;
+    for (let d = inner; d && el.contains(d); d = d.parentElement?.closest('details')) if (!d.open) d.open = true;
+    return inner;
+}
+
+/**
+ * Bring the target into view, then keep it there until the chat has been calm for a while.
+ * Old messages that were just loaded keep changing for seconds (frontend iframes resizing, other
+ * extensions re-rendering, scroll restores…), which would otherwise pull the view away.
+ * Any wheel / touch / key input from the user releases the hold at once.
+ */
+function scrollAndHold(resolve, { quiet = 2500, max = 20000 } = {}) {
     const chat = document.getElementById('chat');
     releaseHold?.();
+    let target = resolve();
+    if (!target) return;
     if (!chat || !chat.contains(target)) { target.scrollIntoView({ block: 'center' }); return; }
-    const anchorOf = () => {
-        const cr = chat.getBoundingClientRect(), tr = target.getBoundingClientRect();
-        return tr.height > cr.height * 0.6 ? cr.height * 0.12 : (cr.height - tr.height) / 2;
-    };
-    const offset = () => target.getBoundingClientRect().top - chat.getBoundingClientRect().top;
+    const offset = (t) => t.getBoundingClientRect().top - chat.getBoundingClientRect().top;
+    const cr = chat.getBoundingClientRect(), tr = target.getBoundingClientRect();
+    const anchor = tr.height > cr.height * 0.6 ? cr.height * 0.12 : Math.max(8, (cr.height - tr.height) / 2);
     const prevAnchor = chat.style.overflowAnchor;
     chat.style.overflowAnchor = 'none';
-    const anchor = anchorOf();
-    chat.scrollTop += offset() - anchor;
-    let done = false, raf = 0;
-    const until = Date.now() + ms;
+    chat.scrollTop += offset(target) - anchor;
+    const t0 = Date.now();
+    let lastChange = t0, lastHeight = chat.scrollHeight, done = false, raf = 0;
     const stop = () => {
         if (done) return;
         done = true;
@@ -545,9 +563,14 @@ function scrollAndHold(target, ms = 2500) {
     window.addEventListener('keydown', stop, true);
     const tick = () => {
         if (done) return;
-        if (!target.isConnected || Date.now() > until) { stop(); return; }
-        const drift = offset() - anchor;
-        if (Math.abs(drift) > 4) chat.scrollTop += drift;
+        const now = Date.now();
+        if (now - t0 > max || (now - lastChange > quiet && now - t0 > 1200)) { stop(); return; }
+        if (!target?.isConnected) { target = resolve(); lastChange = now; }
+        if (target) {
+            const drift = offset(target) - anchor;
+            if (Math.abs(drift) > 4) { chat.scrollTop += drift; lastChange = now; }
+        }
+        if (chat.scrollHeight !== lastHeight) { lastHeight = chat.scrollHeight; lastChange = now; }
         raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -559,26 +582,19 @@ async function jumpTo(i, noteId = null, query = '') {
     if (!el) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
     decorateMessage(i);
     decorateChapters();
-    let target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
-    // search hit inside a folded <details> (QR answers, collapsible replies) → unfold just that one
-    // (and the folds around it), not every fold in the message
     const q = String(query || '').trim().toLowerCase();
-    if (q && !noteId) {
-        const folds = [...el.querySelectorAll('.mes_text details')].filter(d => d.textContent.toLowerCase().includes(q));
-        const inner = folds.find(d => !folds.some(o => o !== d && d.contains(o)));
-        if (inner) {
-            for (let d = inner; d && el.contains(d); d = d.parentElement?.closest('details')) d.open = true;
-            target = inner;
-        }
-    }
+    const resolve = () => jumpTarget(i, noteId, noteId ? '' : q);
+    resolve(); // unfold before measuring
     if (isMobile() && panelOpen()) closePanel();
     await settle(el);
-    scrollAndHold(target);
-    const flashEl = target === el ? el : target;
-    flashEl.classList.remove('stbs-flash');
-    void flashEl.offsetWidth;
-    flashEl.classList.add('stbs-flash');
-    setTimeout(() => flashEl.classList.remove('stbs-flash'), 1800);
+    scrollAndHold(resolve);
+    const flashEl = resolve();
+    if (flashEl) {
+        flashEl.classList.remove('stbs-flash');
+        void flashEl.offsetWidth;
+        flashEl.classList.add('stbs-flash');
+        setTimeout(() => flashEl.classList.remove('stbs-flash'), 1800);
+    }
 }
 
 // ---------------------------------------------------------------- actions
