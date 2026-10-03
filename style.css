@@ -1129,5 +1129,8 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent-i
 /* hidden (👁 hide) messages in search results */
 .stbs-result.is-hidden { border-style: dashed; background: color-mix(in srgb, var(--stbs-surface2) 55%, var(--stbs-surface)); }
 .stbs-result.is-hidden .stbs-snippet { opacity: .85; }
-.stbs-hid-badge { margin-bottom: 2px; }
+.stbs-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 3px; }
 .stbs-hid-badge i { margin-right: 2px; }
+
+.stbs-qr-badge { background: var(--stbs-accent-soft) !important; color: var(--stbs-accent-ink) !important; }
+.stbs-fold-badge i, .stbs-qr-badge i { margin-right: 2px; }

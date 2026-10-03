@@ -205,8 +205,22 @@ function persist() {
 const msg = (i) => ctx().chat?.[i];
 /** Message the user hid (👁 hide / /hide): is_system without being one of SillyTavern's own notices. */
 const isHiddenMes = (m) => !!m?.is_system && !m.extra?.type && !Array.isArray(m.extra?.tool_invocations);
+/** Quick Reply / slash-command output: /comment (e.g. QR analysis results) and /sys narrator messages. */
+const QR_TYPES = new Set(['comment', 'narrator']);
+const isQrMes = (m) => QR_TYPES.has(m?.extra?.type);
 /** SillyTavern's own system notices (help, welcome, tool calls…) — never searched. */
-const isRealSystem = (m) => !!m?.is_system && !isHiddenMes(m);
+const isRealSystem = (m) => !!m?.is_system && !isHiddenMes(m) && !isQrMes(m);
+
+/** Message source → searchable text: no <style>/<script> code, folded <details> bodies included. */
+function searchText(src) {
+    return plain(String(src ?? '').replace(/<(style|script)\b[\s\S]*?<\/\1>/gi, ' ')).replace(/(^|\s)#{1,6}\s+/g, '$1');
+}
+/** Text that sits inside folded <details> (summary excluded), for the "접힌 내용" badge. */
+function foldedText(src) {
+    const out = [];
+    String(src ?? '').replace(/<details\b[^>]*>([\s\S]*?)<\/details>/gi, (_, body) => { out.push(body.replace(/<summary\b[\s\S]*?<\/summary>/i, ' ')); return ''; });
+    return out.length ? searchText(out.join(' ')).toLowerCase() : '';
+}
 const sigAt = (i) => hash(String(msg(i)?.mes ?? ''));
 const speaker = (i) => {
     const m = msg(i);
@@ -468,12 +482,20 @@ async function ensureRendered(i) {
     return null;
 }
 
-async function jumpTo(i, noteId = null) {
+async function jumpTo(i, noteId = null, query = '') {
     const el = await ensureRendered(i);
     if (!el) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
     decorateMessage(i);
     decorateChapters();
-    const target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
+    let target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
+    // search hit inside a folded <details> (QR answers, collapsible replies) → unfold it and go there
+    const q = String(query || '').trim().toLowerCase();
+    if (q && !noteId) {
+        const folds = [...el.querySelectorAll('.mes_text details')].filter(d => d.textContent.toLowerCase().includes(q));
+        const inner = folds.filter(d => !folds.some(o => o !== d && d.contains(o)));
+        folds.forEach(d => { d.open = true; });
+        if (inner[0]) target = inner[0];
+    }
     if (isMobile() && panelOpen()) closePanel();
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const flashEl = target === el ? el : target;
@@ -2107,6 +2129,7 @@ function renderSearch() {
                 <option value="all" ${ui.scope === 'all' ? 'selected' : ''}>모두</option>
                 <option value="user" ${ui.scope === 'user' ? 'selected' : ''}>나</option>
                 <option value="char" ${ui.scope === 'char' ? 'selected' : ''}>캐릭터</option>
+                <option value="qr" ${ui.scope === 'qr' ? 'selected' : ''}>QR·코멘트</option>
             </select>
             <select id="stbs-hidscope" class="stbs-sel" title="숨김 표시한 메시지도 찾을지 골라요">
                 <option value="all" ${hidScope() === 'all' ? 'selected' : ''}>숨김 포함</option>
@@ -2140,24 +2163,28 @@ function searchResults() {
     const chapters = sortedChapters();
     const LIMIT = 300;
     const out = [];
-    let total = 0, hiddenHits = 0;
+    let total = 0, hiddenHits = 0, qrHits = 0;
     for (let i = 0; i < chat.length; i++) {
         const m = chat[i];
         if (!m || isRealSystem(m)) continue;
         const hidden = isHiddenMes(m);
         if (hs === 'shown' && hidden) continue;
         if (hs === 'hidden' && !hidden) continue;
-        if (ui.scope === 'user' && !m.is_user) continue;
-        if (ui.scope === 'char' && m.is_user) continue;
+        const qr = isQrMes(m);
+        if (ui.scope === 'user' && (!m.is_user || qr)) continue;
+        if (ui.scope === 'char' && (m.is_user || qr)) continue;
+        if (ui.scope === 'qr' && !qr) continue;
         if (ui.chapterScope !== 'all' && chapterOf(i, chapters).id !== ui.chapterScope) continue;
-        const text = plain(m.mes);
+        const text = searchText(m.mes);
         const lower = text.toLowerCase();
         const idx = lower.indexOf(q);
         if (idx === -1) continue;
+        const folded = foldedText(m.mes).includes(q);
         let hits = 0;
         for (let p = idx; p !== -1; p = lower.indexOf(q, p + q.length)) hits++;
         total += hits;
         if (hidden) hiddenHits++;
+        if (qr) qrHits++;
         if (out.length >= LIMIT) continue;
         const from = Math.max(0, idx - 40);
         const to = Math.min(text.length, idx + q.length + 60);
@@ -2167,7 +2194,7 @@ function searchResults() {
         out.push(`
         <div class="stbs-item stbs-result ${hidden ? 'is-hidden' : ''}" data-jump="${i}">
             <div class="stbs-grow">
-                ${hidden ? '<span class="stbs-badge stbs-hid-badge"><i class="fa-solid fa-eye-slash"></i> 숨김</span>' : ''}
+                ${hidden || qr || folded ? `<div class="stbs-badges">${hidden ? '<span class="stbs-badge stbs-hid-badge"><i class="fa-solid fa-eye-slash"></i> 숨김</span>' : ''}${qr ? `<span class="stbs-badge stbs-qr-badge"><i class="fa-solid fa-bolt"></i> ${m.extra.type === 'narrator' ? '내레이터' : 'QR·코멘트'}</span>` : ''}${folded ? '<span class="stbs-badge stbs-fold-badge"><i class="fa-solid fa-caret-down"></i> 접힌 내용</span>' : ''}</div>` : ''}
                 <div class="stbs-snippet">${esc(pre)}<mark class="stbs-find">${esc(hit)}</mark>${esc(post)}</div>
                 ${metaLine(i, `${chapters.length ? esc(chapterLabel(chapterOf(i, chapters))) : ''}${hits > 1 ? ` · ${hits}번` : ''}`)}
             </div>
@@ -2178,7 +2205,7 @@ function searchResults() {
             : hs === 'shown' ? '숨긴 메시지에 있을 수도 있어요. 범위를 <b>숨김 포함</b>으로 바꿔 볼까요?' : '다른 단어로 찾아볼까요?';
         return emptyState(`"${esc(ui.q)}" 결과가 없어요`, tip, false);
     }
-    return `<div class="stbs-count">메시지 ${out.length}${out.length >= LIMIT ? '+' : ''}개${hs === 'all' && hiddenHits ? ` <span class="stbs-dim">(숨김 ${hiddenHits})</span>` : ''} · ${total}번 등장${out.length >= LIMIT ? ` <span class="stbs-dim">(처음 ${LIMIT}개만 표시)</span>` : ''}</div>` + out.join('');
+    return `<div class="stbs-count">메시지 ${out.length}${out.length >= LIMIT ? '+' : ''}개${[hs === 'all' && hiddenHits ? `숨김 ${hiddenHits}` : '', ui.scope !== 'qr' && qrHits ? `QR ${qrHits}` : ''].filter(Boolean).map(t => ` <span class="stbs-dim">(${t})</span>`).join('')} · ${total}번 등장${out.length >= LIMIT ? ` <span class="stbs-dim">(처음 ${LIMIT}개만 표시)</span>` : ''}</div>` + out.join('');
 }
 
 function computeStats() {
@@ -2372,7 +2399,7 @@ async function onPanelClick(e) {
         return;
     }
     const jump = e.target.closest('[data-jump]');
-    if (jump) jumpTo(Number(jump.dataset.jump), jump.dataset.note || null);
+    if (jump) jumpTo(Number(jump.dataset.jump), jump.dataset.note || null, ui.tab === 'search' ? ui.q : '');
 }
 
 // ---------------------------------------------------------------- export / import
