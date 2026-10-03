@@ -1125,3 +1125,9 @@ mark.stbs-find { background: var(--stbs-accent-soft); color: var(--stbs-accent-i
 .stbs-commu-box { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 14px; background: var(--stbs-surface2); }
 .stbs-commu-box[hidden] { display: none; }
 .stbs-trash-item .stbs-actions { align-items: center; gap: 4px; opacity: 1; margin: 0 -4px 0 0; }
+
+/* hidden (👁 hide) messages in search results */
+.stbs-result.is-hidden { border-style: dashed; background: color-mix(in srgb, var(--stbs-surface2) 55%, var(--stbs-surface)); }
+.stbs-result.is-hidden .stbs-snippet { opacity: .85; }
+.stbs-hid-badge { margin-bottom: 2px; }
+.stbs-hid-badge i { margin-right: 2px; }

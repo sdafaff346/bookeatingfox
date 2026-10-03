@@ -17,6 +17,7 @@ const DEFAULTS = Object.freeze({
     cardTheme: 'fox',
     cardFox: true,
     cardTransFirst: false,
+    searchHidden: 'all',      // search: 'all' (hidden + shown) | 'shown' | 'hidden'
     panel: null,
     sheetH: 0.62,
 });
@@ -202,6 +203,10 @@ function persist() {
 }
 
 const msg = (i) => ctx().chat?.[i];
+/** Message the user hid (👁 hide / /hide): is_system without being one of SillyTavern's own notices. */
+const isHiddenMes = (m) => !!m?.is_system && !m.extra?.type && !Array.isArray(m.extra?.tool_invocations);
+/** SillyTavern's own system notices (help, welcome, tool calls…) — never searched. */
+const isRealSystem = (m) => !!m?.is_system && !isHiddenMes(m);
 const sigAt = (i) => hash(String(msg(i)?.mes ?? ''));
 const speaker = (i) => {
     const m = msg(i);
@@ -2103,6 +2108,11 @@ function renderSearch() {
                 <option value="user" ${ui.scope === 'user' ? 'selected' : ''}>나</option>
                 <option value="char" ${ui.scope === 'char' ? 'selected' : ''}>캐릭터</option>
             </select>
+            <select id="stbs-hidscope" class="stbs-sel" title="숨김 표시한 메시지도 찾을지 골라요">
+                <option value="all" ${hidScope() === 'all' ? 'selected' : ''}>숨김 포함</option>
+                <option value="shown" ${hidScope() === 'shown' ? 'selected' : ''}>숨김 빼고</option>
+                <option value="hidden" ${hidScope() === 'hidden' ? 'selected' : ''}>숨김만</option>
+            </select>
             ${chapters.length ? `<select id="stbs-chscope" class="stbs-sel">
                 <option value="all">모든 챕터</option>
                 ${(chapters[0].mesId > 0 ? [{ id: '__prologue', title: '프롤로그' }] : []).concat(chapters.map((c, k) => ({ id: c.id, title: `${k + 1}장. ${c.title}` })))
@@ -2113,17 +2123,30 @@ function renderSearch() {
     return html;
 }
 
+function hidScope() {
+    const v = settings().searchHidden;
+    return v === 'shown' || v === 'hidden' ? v : 'all';
+}
+
 function searchResults() {
     const q = ui.q.trim().toLowerCase();
-    if (!q) return emptyState('무엇을 찾아볼까요?', '여우가 킁킁, 이 채팅 전체에서 찾아줄게요.');
+    const hs = hidScope();
+    if (!q) {
+        const nHidden = ctx().chat.filter(isHiddenMes).length;
+        const sub = hs === 'hidden' ? '숨김 표시한 메시지에서만 찾아요.' : hs === 'shown' ? '숨김 표시한 메시지는 빼고 찾아요.' : '숨김 표시한 메시지까지 모두 찾아요.';
+        return emptyState('무엇을 찾아볼까요?', `여우가 킁킁, 이 채팅 전체에서 찾아줄게요.<br>${sub}${nHidden ? ` <span class="stbs-dim">(숨긴 메시지 ${nHidden}개)</span>` : ''}`);
+    }
     const chat = ctx().chat;
     const chapters = sortedChapters();
     const LIMIT = 300;
     const out = [];
-    let total = 0;
+    let total = 0, hiddenHits = 0;
     for (let i = 0; i < chat.length; i++) {
         const m = chat[i];
-        if (!m || m.is_system) continue;
+        if (!m || isRealSystem(m)) continue;
+        const hidden = isHiddenMes(m);
+        if (hs === 'shown' && hidden) continue;
+        if (hs === 'hidden' && !hidden) continue;
         if (ui.scope === 'user' && !m.is_user) continue;
         if (ui.scope === 'char' && m.is_user) continue;
         if (ui.chapterScope !== 'all' && chapterOf(i, chapters).id !== ui.chapterScope) continue;
@@ -2134,6 +2157,7 @@ function searchResults() {
         let hits = 0;
         for (let p = idx; p !== -1; p = lower.indexOf(q, p + q.length)) hits++;
         total += hits;
+        if (hidden) hiddenHits++;
         if (out.length >= LIMIT) continue;
         const from = Math.max(0, idx - 40);
         const to = Math.min(text.length, idx + q.length + 60);
@@ -2141,15 +2165,20 @@ function searchResults() {
         const hit = text.slice(idx, idx + q.length);
         const post = text.slice(idx + q.length, to) + (to < text.length ? '…' : '');
         out.push(`
-        <div class="stbs-item stbs-result" data-jump="${i}">
+        <div class="stbs-item stbs-result ${hidden ? 'is-hidden' : ''}" data-jump="${i}">
             <div class="stbs-grow">
+                ${hidden ? '<span class="stbs-badge stbs-hid-badge"><i class="fa-solid fa-eye-slash"></i> 숨김</span>' : ''}
                 <div class="stbs-snippet">${esc(pre)}<mark class="stbs-find">${esc(hit)}</mark>${esc(post)}</div>
                 ${metaLine(i, `${chapters.length ? esc(chapterLabel(chapterOf(i, chapters))) : ''}${hits > 1 ? ` · ${hits}번` : ''}`)}
             </div>
         </div>`);
     }
-    if (!out.length) return emptyState(`"${esc(ui.q)}" 결과가 없어요`, '다른 단어로 찾아볼까요?', false);
-    return `<div class="stbs-count">메시지 ${out.length}${out.length >= LIMIT ? '+' : ''}개 · ${total}번 등장${out.length >= LIMIT ? ` <span class="stbs-dim">(처음 ${LIMIT}개만 표시)</span>` : ''}</div>` + out.join('');
+    if (!out.length) {
+        const tip = hs === 'hidden' ? '숨긴 메시지에는 없어요. 범위를 <b>숨김 포함</b>으로 바꿔 볼까요?'
+            : hs === 'shown' ? '숨긴 메시지에 있을 수도 있어요. 범위를 <b>숨김 포함</b>으로 바꿔 볼까요?' : '다른 단어로 찾아볼까요?';
+        return emptyState(`"${esc(ui.q)}" 결과가 없어요`, tip, false);
+    }
+    return `<div class="stbs-count">메시지 ${out.length}${out.length >= LIMIT ? '+' : ''}개${hs === 'all' && hiddenHits ? ` <span class="stbs-dim">(숨김 ${hiddenHits})</span>` : ''} · ${total}번 등장${out.length >= LIMIT ? ` <span class="stbs-dim">(처음 ${LIMIT}개만 표시)</span>` : ''}</div>` + out.join('');
 }
 
 function computeStats() {
@@ -2259,6 +2288,7 @@ function onPanelInput(e) {
     if (t.id === 'stbs-q') { ui.q = t.value; runSearch(); }
     else if (t.id === 'stbs-scope' && e.type === 'change') { ui.scope = t.value; runSearch(); }
     else if (t.id === 'stbs-chscope' && e.type === 'change') { ui.chapterScope = t.value; runSearch(); }
+    else if (t.id === 'stbs-hidscope' && e.type === 'change') { settings().searchHidden = t.value; saveSettings(); runSearch(); }
 }
 
 async function onPanelClick(e) {
