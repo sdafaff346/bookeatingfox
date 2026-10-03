@@ -471,8 +471,20 @@ let showMoreFn = null;
 import('../../../../script.js').then(m => { showMoreFn = m.showMoreMessages ?? null; }).catch(() => { });
 
 async function ensureRendered(i) {
+    const sel = () => document.querySelector(`#chat .mes[mesid="${i}"]`);
+    if (sel()) return sel();
+    // Load everything up to the target in ONE step (not 100 at a time): far fewer reflows, no stutter.
+    if (showMoreFn) {
+        const first = Number(document.querySelector('#chat .mes[mesid]')?.getAttribute('mesid'));
+        if (Number.isFinite(first) && first > i) {
+            if (first - i > 150) toastr.info('🦊 앞쪽 페이지를 넘기는 중이에요…', '', { timeOut: 1600 });
+            await nextFrame();
+            try { await showMoreFn(first - i + 3); } catch { /* fall back to the loop below */ }
+            if (sel()) return sel();
+        }
+    }
     for (let n = 0; n < 500; n++) {
-        const el = document.querySelector(`#chat .mes[mesid="${i}"]`);
+        const el = sel();
         if (el) return el;
         const btn = document.getElementById('show_more_messages');
         if (!btn) return null;
@@ -482,22 +494,86 @@ async function ensureRendered(i) {
     return null;
 }
 
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
+
+/** Wait (briefly) until images / iframes inside el have loaded, so its height is final. */
+async function settle(el, max = 900) {
+    const t0 = Date.now();
+    await nextFrame(); await nextFrame();
+    const pending = [...el.querySelectorAll('img, iframe, video')].filter(m =>
+        m instanceof HTMLImageElement ? !m.complete : m instanceof HTMLVideoElement ? m.readyState < 1 : true);
+    if (pending.length) {
+        await Promise.race([
+            Promise.all(pending.map(m => new Promise(r => { m.addEventListener('load', r, { once: true }); m.addEventListener('error', r, { once: true }); m.addEventListener('loadeddata', r, { once: true }); }))),
+            sleep(Math.max(0, max - (Date.now() - t0))),
+        ]);
+    }
+    await nextFrame();
+}
+
+let releaseHold = null;
+/**
+ * Scroll #chat so target sits at a fixed spot, then hold it there for a moment: content that is still
+ * growing (frontend iframes inside an unfolded QR answer…) or other code scrolling the chat to the bottom
+ * would otherwise pull the view away. Any wheel/touch/key input from the user releases the hold at once.
+ */
+function scrollAndHold(target, ms = 2500) {
+    const chat = document.getElementById('chat');
+    releaseHold?.();
+    if (!chat || !chat.contains(target)) { target.scrollIntoView({ block: 'center' }); return; }
+    const anchorOf = () => {
+        const cr = chat.getBoundingClientRect(), tr = target.getBoundingClientRect();
+        return tr.height > cr.height * 0.6 ? cr.height * 0.12 : (cr.height - tr.height) / 2;
+    };
+    const offset = () => target.getBoundingClientRect().top - chat.getBoundingClientRect().top;
+    const prevAnchor = chat.style.overflowAnchor;
+    chat.style.overflowAnchor = 'none';
+    const anchor = anchorOf();
+    chat.scrollTop += offset() - anchor;
+    let done = false, raf = 0;
+    const until = Date.now() + ms;
+    const stop = () => {
+        if (done) return;
+        done = true;
+        cancelAnimationFrame(raf);
+        for (const ev of ['wheel', 'touchstart', 'pointerdown']) chat.removeEventListener(ev, stop);
+        window.removeEventListener('keydown', stop, true);
+        chat.style.overflowAnchor = prevAnchor;
+        if (releaseHold === stop) releaseHold = null;
+    };
+    for (const ev of ['wheel', 'touchstart', 'pointerdown']) chat.addEventListener(ev, stop, { passive: true });
+    window.addEventListener('keydown', stop, true);
+    const tick = () => {
+        if (done) return;
+        if (!target.isConnected || Date.now() > until) { stop(); return; }
+        const drift = offset() - anchor;
+        if (Math.abs(drift) > 4) chat.scrollTop += drift;
+        raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    releaseHold = stop;
+}
+
 async function jumpTo(i, noteId = null, query = '') {
     const el = await ensureRendered(i);
     if (!el) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
     decorateMessage(i);
     decorateChapters();
     let target = (noteId && el.querySelector(`mark[data-note="${noteId}"]`)) || el;
-    // search hit inside a folded <details> (QR answers, collapsible replies) → unfold it and go there
+    // search hit inside a folded <details> (QR answers, collapsible replies) → unfold just that one
+    // (and the folds around it), not every fold in the message
     const q = String(query || '').trim().toLowerCase();
     if (q && !noteId) {
         const folds = [...el.querySelectorAll('.mes_text details')].filter(d => d.textContent.toLowerCase().includes(q));
-        const inner = folds.filter(d => !folds.some(o => o !== d && d.contains(o)));
-        folds.forEach(d => { d.open = true; });
-        if (inner[0]) target = inner[0];
+        const inner = folds.find(d => !folds.some(o => o !== d && d.contains(o)));
+        if (inner) {
+            for (let d = inner; d && el.contains(d); d = d.parentElement?.closest('details')) d.open = true;
+            target = inner;
+        }
     }
     if (isMobile() && panelOpen()) closePanel();
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await settle(el);
+    scrollAndHold(target);
     const flashEl = target === el ? el : target;
     flashEl.classList.remove('stbs-flash');
     void flashEl.offsetWidth;
