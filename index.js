@@ -483,25 +483,50 @@ let showMoreFn = null;
 let stScript = null;
 import('../../../../script.js').then(m => { stScript = m; showMoreFn = m.showMoreMessages ?? null; }).catch(() => { });
 
-async function ensureRendered(i) {
+/**
+ * Make sure message i is drawn. Loads all older messages in one go, but never waits for other
+ * extensions: SillyTavern only finishes "show more" after every MORE_MESSAGES_LOADED listener is done,
+ * and one slow (or stuck) listener would freeze the jump forever. So we start the load and simply
+ * watch for the element to appear, with a hard time limit.
+ */
+async function ensureRendered(i, { timeout = 60000 } = {}) {
     const sel = () => document.querySelector(`#chat .mes[mesid="${i}"]`);
     if (sel()) return sel();
-    // Load everything up to the target in ONE step (not 100 at a time): far fewer reflows, no stutter.
-    if (showMoreFn) {
-        const first = Number(document.querySelector('#chat .mes[mesid]')?.getAttribute('mesid'));
-        if (Number.isFinite(first) && first > i) {
-            await nextFrame();
-            try { await showMoreFn(first - i + 3); } catch { /* fall back to the loop below */ }
-            if (sel()) return sel();
+    const t0 = Date.now();
+    const waitFor = async (until) => {
+        while (Date.now() < until) {
+            const el = sel();
+            if (el) return el;
+            await sleep(150);
         }
+        return sel();
+    };
+    const first = Number(document.querySelector('#chat .mes[mesid]')?.getAttribute('mesid'));
+    if (showMoreFn && Number.isFinite(first) && first > i) {
+        await nextFrame();
+        let settled = false;
+        Promise.resolve().then(() => showMoreFn(first - i + 3)).catch(() => { }).finally(() => { settled = true; });
+        // the messages are inserted synchronously at the start of showMoreMessages; listeners run after
+        const el = await (async () => {
+            while (Date.now() - t0 < timeout) {
+                const found = sel();
+                if (found) return found;
+                if (settled) return null; // finished without drawing it → fall back below
+                await sleep(150);
+            }
+            return null;
+        })();
+        if (el) return el;
     }
-    for (let n = 0; n < 500; n++) {
+    // fallback: press "Show more" step by step
+    while (Date.now() - t0 < timeout) {
         const el = sel();
         if (el) return el;
         const btn = document.getElementById('show_more_messages');
         if (!btn) return null;
-        if (showMoreFn) await showMoreFn();
-        else { btn.click(); await sleep(60); }
+        btn.click();
+        const got = await waitFor(Date.now() + 1500);
+        if (got) return got;
     }
     return null;
 }
@@ -607,10 +632,15 @@ async function jumpTo(i, noteId = null, query = '') {
     let busyToast = null;
     if (missing > 120) busyToast = toastr.info(`메시지 ${missing}개를 불러와서 그 위치로 가는 중이에요. 화면이 잠깐 멈춰도 기다려 주세요.`, '🦊 앞쪽 페이지를 넘기는 중…', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
     jumpBusy = true;
+    // phone: close the panel first so the chat (and the notice) is what you see while it loads
+    if (isMobile() && panelOpen()) closePanel();
     if (busyToast) await sleep(80); // let the notice paint before the heavy loading freezes the screen
     let el;
-    try { el = await ensureRendered(i); } finally { jumpBusy = false; if (busyToast) toastr.clear(busyToast); }
-    if (!el) { toastr.warning('메시지를 찾을 수 없어요.'); return; }
+    try { el = await ensureRendered(i); } catch { el = null; } finally { jumpBusy = false; if (busyToast) toastr.clear(busyToast); }
+    if (!el) {
+        toastr.warning('옛날 메시지를 끝까지 불러오지 못했어요. 눌러서 미리 읽기 창으로 볼 수 있어요.', '', { timeOut: 7000, onclick: () => openReader(i, { noteId, query }) });
+        return;
+    }
     decorateMessage(i);
     decorateChapters();
     const q = String(query || '').trim().toLowerCase();
@@ -2602,7 +2632,7 @@ async function onPanelClick(e) {
     const jump = e.target.closest('[data-jump]');
     if (jump) {
         const i = Number(jump.dataset.jump), noteId = jump.dataset.note || null, q = ui.tab === 'search' ? ui.q : '';
-        if (settings().farReader && missingBefore(i) >= READER_MIN_MISSING && !jumpBusy) openReader(i, { noteId, query: q });
+        if (settings().farReader && missingBefore(i) >= READER_MIN_MISSING) openReader(i, { noteId, query: q });
         else jumpTo(i, noteId, q);
     }
 }
