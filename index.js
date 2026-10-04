@@ -28,7 +28,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
-const VERSION = '1.13.1';
+const VERSION = '1.13.2';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -589,12 +589,14 @@ const NATIVE_SCROLL_TOP = Object.getOwnPropertyDescriptor(Element.prototype, 'sc
 function guardScroller(sc) {
     releaseGuard?.();
     const get = () => NATIVE_SCROLL_TOP.get.call(sc);
-    const set = (v) => NATIVE_SCROLL_TOP.set.call(sc, v);
-    const block = (how) => () => {
+    let expect = get();
+    const set = (v) => { NATIVE_SCROLL_TOP.set.call(sc, v); expect = get(); };
+    const note = (how) => {
         if (!jumpLog) return;
         jumpLog.blocked++;
-        if (jumpLog.who.length < 15) jumpLog.who.push(`${how} ← ${callerHint()}`);
+        if (jumpLog.who.length < 15) jumpLog.who.push(how);
     };
+    const block = (how) => () => note(`${how} ← ${callerHint()}`);
     try {
         Object.defineProperty(sc, 'scrollTop', { configurable: true, get, set: block('scrollTop') });
         for (const m of ['scrollTo', 'scroll', 'scrollBy']) Object.defineProperty(sc, m, { configurable: true, writable: true, value: block(m) });
@@ -603,25 +605,72 @@ function guardScroller(sc) {
     const blockSiv = block('scrollIntoView');
     const patchedSiv = function (...a) { if (sc.contains(this) && this !== sc) { blockSiv(); return; } return nativeSiv.apply(this, a); };
     Element.prototype.scrollIntoView = patchedSiv;
+
+    // The user's own hand, anywhere in the chat — including inside frontend frames (their events never
+    // bubble out of the iframe, so each frame's document is listened to separately).
+    const USER_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+    const hooked = new Map(); // frame window → document
+    const hookFrames = () => {
+        for (const f of sc.querySelectorAll('iframe')) {
+            let w, d;
+            try { w = f.contentWindow; d = f.contentDocument; } catch { continue; }
+            if (!w || !d || hooked.get(w) === d) continue;
+            hooked.set(w, d);
+            for (const ev of USER_EVENTS) d.addEventListener(ev, onUser, { capture: true, passive: true });
+        }
+    };
+
+    // Anything else that still moves the chat natively (focus() on an input in a frontend, a frame's
+    // scrollIntoView, the browser restoring focus when a window closes…) is put right back. A long run
+    // of such moves means a hand we can't see (e.g. a video embed from another site) → let go.
+    let odd = [];
+    // A touch / wheel / key only counts as "the user took over" if the chat then really moves — a stray
+    // event (a tap on a message, a synthetic event from another extension) must not make us let go.
+    let userUntil = 0, userLogged = false;
+    const userActive = () => performance.now() < userUntil;
+    const onScroll = () => {
+        const cur = get();
+        if (Math.abs(cur - expect) <= 2) return;
+        if (userActive()) { expect = cur; releaseHold?.('user scroll'); release('user scroll'); return; }
+        const maxTop = sc.scrollHeight - sc.clientHeight;
+        if (cur < expect && cur >= maxTop - 2) { expect = cur; return; } // content below shrank
+        const now = performance.now();
+        odd = odd.filter(t => now - t < 800); odd.push(now);
+        if (odd.length > 6) { releaseHold?.('user (unseen)'); release('user (unseen)'); return; }
+        const ae = document.activeElement;
+        note(`native scroll ${Math.round(cur - expect)}px (focus: ${ae ? ae.tagName.toLowerCase() + (ae.id ? '#' + ae.id : '') : '-'})`);
+        NATIVE_SCROLL_TOP.set.call(sc, expect);
+    };
+    sc.addEventListener('scroll', onScroll, { passive: true });
+
     let done = false;
     const release = (why = '') => {
         if (done) return;
         done = true;
         for (const m of ['scrollTop', 'scrollTo', 'scroll', 'scrollBy']) { try { delete sc[m]; } catch { /* ignore */ } }
         if (Element.prototype.scrollIntoView === patchedSiv) Element.prototype.scrollIntoView = nativeSiv;
+        sc.removeEventListener('scroll', onScroll);
         for (const ev of ['wheel', 'touchstart', 'pointerdown']) sc.removeEventListener(ev, onUser);
         window.removeEventListener('keydown', onKey, true);
-        clearTimeout(timer);
+        for (const d of hooked.values()) for (const ev of USER_EVENTS) { try { d.removeEventListener(ev, onUser, true); } catch { /* frame gone */ } }
+        hooked.clear();
+        clearTimeout(timer); clearInterval(frameTimer);
         if (releaseGuard === release) releaseGuard = null;
         logStep(`scroll guard released${why ? ` (${why})` : ''}`);
     };
-    const onUser = () => { releaseHold?.('user'); release('user'); };
+    const onUser = () => {
+        userUntil = performance.now() + 1500;
+        if (!userLogged) { userLogged = true; logStep('your hand on the chat — letting go as soon as it moves'); }
+    };
     const onKey = (e) => { if (!['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) onUser(); };
     for (const ev of ['wheel', 'touchstart', 'pointerdown']) sc.addEventListener(ev, onUser, { passive: true });
     window.addEventListener('keydown', onKey, true);
-    const timer = setTimeout(() => release('timeout'), 60000);
+    hookFrames();
+    const frameTimer = setInterval(hookFrames, 400); // frames load lazily as they come into view
+    let timer = setTimeout(() => { releaseHold?.('timeout'); release('timeout'); }, 60000);
+    const extend = (ms) => { clearTimeout(timer); timer = setTimeout(() => { releaseHold?.('timeout'); release('timeout'); }, ms); };
     releaseGuard = release;
-    return { get, set, release };
+    return { sc, get, set, release, userActive, extend };
 }
 
 /**
@@ -630,13 +679,14 @@ function guardScroller(sc) {
  * extensions re-rendering…), which would otherwise pull the view away. If the message disappears
  * (another extension unloading old messages), it is loaded again.
  */
-function scrollAndHold(resolve, { reload, quiet = 3000, max = 60000 } = {}) {
+function scrollAndHold(resolve, { reload, guard = null, quiet = 3000, max = 60000 } = {}) {
     releaseHold?.('new jump');
     let target = resolve();
-    if (!target) return;
+    if (!target) { guard?.release('no target'); return; }
     const sc = chatScroller(target);
     const isDoc = sc === document.scrollingElement || sc === document.documentElement;
-    const io = guardScroller(sc);
+    const io = guard && guard.sc === sc && releaseGuard === guard.release ? guard : (guard?.release('other scroller'), guardScroller(sc));
+    io.extend(max + 500);
     const top0 = () => isDoc ? 0 : sc.getBoundingClientRect().top;
     const viewH = () => isDoc ? window.innerHeight : sc.clientHeight;
     const offset = (t) => t.getBoundingClientRect().top - top0();
@@ -647,10 +697,7 @@ function scrollAndHold(resolve, { reload, quiet = 3000, max = 60000 } = {}) {
     const prevBehavior = sc.style.scrollBehavior;
     sc.style.scrollBehavior = 'auto'; // a theme's smooth scrolling would turn every correction into a slow glide
     io.set(io.get() + offset(target) - anchor);
-    // Other code can't move the chat while we hold it (guard), and content changing size doesn't change
-    // scrollTop either. So if scrollTop moved and we didn't do it, it was the user — even when their
-    // finger / wheel was over a frontend frame, whose events never reach us.
-    let expect = io.get();
+
     if (jumpLog) jumpLog.scroller = isDoc ? 'document' : (sc.id ? `#${sc.id}` : sc.className.toString().slice(0, 40));
     logStep(`scrolled, target at ${Math.round(offset(target))}px (want ${Math.round(anchor)})`);
     const t0 = Date.now();
@@ -677,12 +724,6 @@ function scrollAndHold(resolve, { reload, quiet = 3000, max = 60000 } = {}) {
         if (now - lastCheck < (calm ? 250 : 90)) { raf = requestAnimationFrame(tick); return; }
         lastCheck = now;
         if (now - t0 > max) { stop('max time'); releaseGuard?.('max time'); return; }
-        const cur = io.get();
-        if (Math.abs(cur - expect) > 2) {
-            const maxTop = sc.scrollHeight - viewH();
-            const clamped = cur < expect && cur >= maxTop - 2; // content below shrank, browser pulled the view up
-            if (!clamped) { logStep(`you scrolled (${Math.round(cur - expect)}px) → let go`); stop('user scroll'); releaseGuard?.('user scroll'); return; }
-        }
         if (!calm && now - lastChange > quiet && now - t0 > 1500) { calm = true; logStep('calm — keeping an eye on it until you scroll'); if (jumpLog) jumpLog.final = { y: Math.round(offset(target || resolve() || sc)), calm: true }; }
         // look the target up again every time: a re-rendered message is a new element, and its folded
         // answer is closed again (resolve() re-opens it)
@@ -697,12 +738,11 @@ function scrollAndHold(resolve, { reload, quiet = 3000, max = 60000 } = {}) {
                 reload().then(() => { reloading = false; target = resolve(); lastChange = Date.now(); if (target) anchor = anchorFor(target); });
             }
         }
-        if (target) {
+        if (target && !io.userActive()) {
             const drift = offset(target) - anchor;
             if (Math.abs(drift) > 4) { io.set(io.get() + drift); lastChange = now; corrections++; if (calm) logStep(`moved while calm (${Math.round(drift)}px) → put back`); if (corrections <= 6 || corrections % 20 === 0) logStep(`corrected drift ${Math.round(drift)}px`); }
         }
         if (sc.scrollHeight !== lastHeight) { lastHeight = sc.scrollHeight; lastChange = now; }
-        expect = io.get();
         raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -749,6 +789,11 @@ async function jumpTo(i, noteId = null, query = '') {
     let busyToast = null;
     if (missing > 120) busyToast = toastr.info(`메시지 ${missing}개를 불러와서 그 위치로 가는 중이에요. 화면이 잠깐 멈춰도 기다려 주세요.`, '🦊 앞쪽 페이지를 넘기는 중…', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
     jumpBusy = true;
+    // From here on the chat's scroll position is ours: closing the panel / reading window, the phone
+    // keyboard going away, SillyTavern's own fixes on resize — nothing can move it back while we go.
+    // (Not while old messages are loading: the browser keeps the view steady over the inserted messages
+    // by itself then, and undoing that would make hundreds of frames start loading on screen.)
+    const guard = missing ? null : guardScroller(chatScroller(null));
     // phone: close the panel first so the chat (and the notice) is what you see while it loads
     if (isMobile() && panelOpen()) closePanel();
     if (busyToast) await sleep(80); // let the notice paint before the heavy loading freezes the screen
@@ -757,6 +802,7 @@ async function jumpTo(i, noteId = null, query = '') {
     logStep(el ? `message drawn (${document.querySelectorAll('#chat .mes').length} on screen)` : 'message could not be drawn');
     if (!el) {
         jumpLog.end = 'not drawn';
+        guard?.release('not drawn');
         toastr.warning('옛날 메시지를 끝까지 불러오지 못했어요. 눌러서 미리 읽기 창으로 볼 수 있어요.', '', { timeOut: 7000, onclick: () => openReader(i, { noteId, query }) });
         return;
     }
@@ -765,8 +811,15 @@ async function jumpTo(i, noteId = null, query = '') {
     const resolve = () => jumpTarget(i, noteId, noteId ? '' : q);
     resolve(); // unfold before measuring
     if (isMobile() && panelOpen()) closePanel();
-    // go there at once — don't wait for frames / other extensions to finish; the hold corrects as things settle
-    scrollAndHold(resolve, { reload: () => ensureRendered(i, { timeout: 20000 }).catch(() => null) });
+    // something in the chat still holding focus (an input in a frontend, a frame you tapped) would pull
+    // the view back to itself when focus returns to it
+    try { const ae = document.activeElement; if (ae && ae !== document.body && $id('chat')?.contains(ae)) { logStep(`released focus from ${ae.tagName.toLowerCase()}`); ae.blur(); } } catch { /* ignore */ }
+    // let closing windows / the keyboard finish first (the guard keeps everything still meanwhile), then go —
+    // without waiting for frames or other extensions; the hold corrects as things settle
+    // (only when nothing had to be loaded — after a long load all of that is long over, and waiting for a
+    // frame then would mean waiting for Tavern Helper to finish drawing hundreds of frames)
+    if (!missing) { await nextFrame(); await sleep(isMobile() ? 300 : 60); }
+    scrollAndHold(resolve, { guard, reload: () => ensureRendered(i, { timeout: 20000 }).catch(() => null) });
     setTimeout(() => { try { decorateChapters(); } catch { /* ignore */ } }, 0);
     const flashEl = resolve();
     if (flashEl) {
