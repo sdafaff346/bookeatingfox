@@ -28,6 +28,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
+const VERSION = '1.13.0';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -533,22 +534,23 @@ async function ensureRendered(i, { timeout = 60000 } = {}) {
 
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
 
-/** Wait (briefly) until images / iframes inside el have loaded, so its height is final. */
-async function settle(el, max = 900) {
-    const t0 = Date.now();
-    await nextFrame(); await nextFrame();
-    const pending = [...el.querySelectorAll('img, iframe, video')].filter(m =>
-        m instanceof HTMLImageElement ? !m.complete : m instanceof HTMLVideoElement ? m.readyState < 1 : true);
-    if (pending.length) {
-        await Promise.race([
-            Promise.all(pending.map(m => new Promise(r => { m.addEventListener('load', r, { once: true }); m.addEventListener('error', r, { once: true }); m.addEventListener('loadeddata', r, { once: true }); }))),
-            sleep(Math.max(0, max - (Date.now() - t0))),
-        ]);
-    }
-    await nextFrame();
-}
-
 let releaseHold = null;
+let releaseGuard = null;
+
+/** Last jump, step by step — shown by `/bookfox debug` so a failing jump on someone's own setup can be explained. */
+let jumpLog = null;
+function logStep(msg) {
+    if (!jumpLog) return;
+    jumpLog.steps.push(`${String(Date.now() - jumpLog.t0).padStart(6)}ms ${msg}`);
+    if (jumpLog.steps.length > 80) jumpLog.steps.splice(40, 1);
+}
+/** Which code (outside this extension) tried to scroll the chat. */
+function callerHint() {
+    const lines = String(new Error().stack || '').split('\n').slice(2);
+    const skip = /SillyTavern-BookFox|stbs|jquery/i;
+    const hit = lines.find(l => /https?:|\.js/.test(l) && !skip.test(l)) || lines.find(l => /https?:|\.js/.test(l)) || '';
+    return hit.trim().replace(/^at\s+/, '').replace(/https?:\/\/[^/]+\//, '').slice(0, 120);
+}
 
 /**
  * The element to show for a jump, looked up fresh every time: other extensions (Tavern Helper…) may
@@ -567,50 +569,129 @@ function jumpTarget(i, noteId, q) {
     return inner;
 }
 
+/** The element that actually scrolls the chat (normally #chat; some themes scroll a parent instead). */
+function chatScroller(target) {
+    const chat = $id('chat');
+    const scrolls = (n) => { const o = getComputedStyle(n).overflowY; return (o === 'auto' || o === 'scroll' || o === 'overlay') && n.scrollHeight > n.clientHeight + 4; };
+    if (chat && scrolls(chat)) return chat;
+    for (let n = (target || chat)?.parentElement; n && n !== document.body; n = n.parentElement) if (scrolls(n)) return n;
+    return document.scrollingElement || document.documentElement;
+}
+
+const NATIVE_SCROLL_TOP = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+
+/**
+ * While we are bringing a message into view, the chat's scroll position belongs to us: other code
+ * (SillyTavern's "scroll to bottom", theme or Tavern Helper scripts, frontends inside messages…) that
+ * tries to move it is ignored. Only the user's own wheel / touch / keys (and new messages) end this.
+ * Returns { get, set } that bypass the block, for our own scrolling.
+ */
+function guardScroller(sc) {
+    releaseGuard?.();
+    const get = () => NATIVE_SCROLL_TOP.get.call(sc);
+    const set = (v) => NATIVE_SCROLL_TOP.set.call(sc, v);
+    const block = (how) => () => {
+        if (!jumpLog) return;
+        jumpLog.blocked++;
+        if (jumpLog.who.length < 15) jumpLog.who.push(`${how} ← ${callerHint()}`);
+    };
+    try {
+        Object.defineProperty(sc, 'scrollTop', { configurable: true, get, set: block('scrollTop') });
+        for (const m of ['scrollTo', 'scroll', 'scrollBy']) Object.defineProperty(sc, m, { configurable: true, writable: true, value: block(m) });
+    } catch { /* ignore */ }
+    const nativeSiv = Element.prototype.scrollIntoView;
+    const blockSiv = block('scrollIntoView');
+    const patchedSiv = function (...a) { if (sc.contains(this) && this !== sc) { blockSiv(); return; } return nativeSiv.apply(this, a); };
+    Element.prototype.scrollIntoView = patchedSiv;
+    let done = false;
+    const release = (why = '') => {
+        if (done) return;
+        done = true;
+        for (const m of ['scrollTop', 'scrollTo', 'scroll', 'scrollBy']) { try { delete sc[m]; } catch { /* ignore */ } }
+        if (Element.prototype.scrollIntoView === patchedSiv) Element.prototype.scrollIntoView = nativeSiv;
+        for (const ev of ['wheel', 'touchstart', 'pointerdown']) sc.removeEventListener(ev, onUser);
+        window.removeEventListener('keydown', onKey, true);
+        clearTimeout(timer);
+        if (releaseGuard === release) releaseGuard = null;
+        logStep(`scroll guard released${why ? ` (${why})` : ''}`);
+    };
+    const onUser = () => { releaseHold?.('user'); release('user'); };
+    const onKey = (e) => { if (!['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) onUser(); };
+    for (const ev of ['wheel', 'touchstart', 'pointerdown']) sc.addEventListener(ev, onUser, { passive: true });
+    window.addEventListener('keydown', onKey, true);
+    const timer = setTimeout(() => release('timeout'), 60000);
+    releaseGuard = release;
+    return { get, set, release };
+}
+
 /**
  * Bring the target into view, then keep it there until the chat has been calm for a while.
  * Old messages that were just loaded keep changing for seconds (frontend iframes resizing, other
- * extensions re-rendering, scroll restores…), which would otherwise pull the view away.
- * Any wheel / touch / key input from the user releases the hold at once.
+ * extensions re-rendering…), which would otherwise pull the view away. If the message disappears
+ * (another extension unloading old messages), it is loaded again.
  */
-function scrollAndHold(resolve, { quiet = 2500, max = 20000 } = {}) {
-    const chat = document.getElementById('chat');
-    releaseHold?.();
+function scrollAndHold(resolve, { reload, quiet = 3000, max = 60000 } = {}) {
+    releaseHold?.('new jump');
     let target = resolve();
     if (!target) return;
-    if (!chat || !chat.contains(target)) { target.scrollIntoView({ block: 'center' }); return; }
-    const offset = (t) => t.getBoundingClientRect().top - chat.getBoundingClientRect().top;
-    const cr = chat.getBoundingClientRect(), tr = target.getBoundingClientRect();
-    const anchor = tr.height > cr.height * 0.6 ? cr.height * 0.12 : Math.max(8, (cr.height - tr.height) / 2);
-    const prevAnchor = chat.style.overflowAnchor;
-    chat.style.overflowAnchor = 'none';
-    chat.scrollTop += offset(target) - anchor;
+    const sc = chatScroller(target);
+    const isDoc = sc === document.scrollingElement || sc === document.documentElement;
+    const io = guardScroller(sc);
+    const top0 = () => isDoc ? 0 : sc.getBoundingClientRect().top;
+    const viewH = () => isDoc ? window.innerHeight : sc.clientHeight;
+    const offset = (t) => t.getBoundingClientRect().top - top0();
+    const anchorFor = (t) => { const h = t.getBoundingClientRect().height, H = viewH(); return h > H * 0.6 ? H * 0.12 : Math.max(8, (H - h) / 2); };
+    let anchor = anchorFor(target);
+    const prevAnchor = sc.style.overflowAnchor;
+    sc.style.overflowAnchor = 'none';
+    const prevBehavior = sc.style.scrollBehavior;
+    sc.style.scrollBehavior = 'auto'; // a theme's smooth scrolling would turn every correction into a slow glide
+    io.set(io.get() + offset(target) - anchor);
+    if (jumpLog) jumpLog.scroller = isDoc ? 'document' : (sc.id ? `#${sc.id}` : sc.className.toString().slice(0, 40));
+    logStep(`scrolled, target at ${Math.round(offset(target))}px (want ${Math.round(anchor)})`);
     const t0 = Date.now();
-    let lastChange = t0, lastHeight = chat.scrollHeight, done = false, raf = 0;
-    const stop = () => {
+    let lastChange = t0, lastHeight = sc.scrollHeight, done = false, raf = 0, lastCheck = 0, corrections = 0, reloads = 0, reloading = false, calm = false;
+    const stop = (why) => {
         if (done) return;
         done = true;
         cancelAnimationFrame(raf);
-        for (const ev of ['wheel', 'touchstart', 'pointerdown']) chat.removeEventListener(ev, stop);
-        window.removeEventListener('keydown', stop, true);
-        chat.style.overflowAnchor = prevAnchor;
+        sc.style.overflowAnchor = prevAnchor;
+        sc.style.scrollBehavior = prevBehavior;
         if (releaseHold === stop) releaseHold = null;
+        if (jumpLog) {
+            const t = resolve();
+            const y = t ? Math.round(offset(t)) : null;
+            jumpLog.end = why; jumpLog.corrections = corrections;
+            jumpLog.final = t ? { y, visible: y > -t.getBoundingClientRect().height && y < viewH() } : 'target gone';
+        }
+        logStep(`hold ended (${why}), ${corrections} corrections`);
     };
-    for (const ev of ['wheel', 'touchstart', 'pointerdown']) chat.addEventListener(ev, stop, { passive: true });
-    window.addEventListener('keydown', stop, true);
-    let lastCheck = 0;
     const tick = () => {
         if (done) return;
         const now = Date.now();
-        if (now - lastCheck < 90) { raf = requestAnimationFrame(tick); return; }
+        // busy at first (every 90ms); once calm, a cheap check four times a second until the user takes over
+        if (now - lastCheck < (calm ? 250 : 90)) { raf = requestAnimationFrame(tick); return; }
         lastCheck = now;
-        if (now - t0 > max || (now - lastChange > quiet && now - t0 > 1200)) { stop(); return; }
-        if (!target?.isConnected) { target = resolve(); lastChange = now; }
+        if (now - t0 > max) { stop('max time'); releaseGuard?.('max time'); return; }
+        if (!calm && now - lastChange > quiet && now - t0 > 1500) { calm = true; logStep('calm — keeping an eye on it until you scroll'); if (jumpLog) jumpLog.final = { y: Math.round(offset(target || resolve() || sc)), calm: true }; }
+        // look the target up again every time: a re-rendered message is a new element, and its folded
+        // answer is closed again (resolve() re-opens it)
+        const fresh = resolve();
+        if (fresh !== target) {
+            target = fresh;
+            lastChange = now;
+            if (target) { anchor = anchorFor(target); logStep('target re-rendered, found again'); }
+            else if (reload && !reloading && reloads < 3) {
+                reloading = true; reloads++;
+                logStep('target was removed from the chat → loading it again');
+                reload().then(() => { reloading = false; target = resolve(); lastChange = Date.now(); if (target) anchor = anchorFor(target); });
+            }
+        }
         if (target) {
             const drift = offset(target) - anchor;
-            if (Math.abs(drift) > 4) { chat.scrollTop += drift; lastChange = now; }
+            if (Math.abs(drift) > 4) { io.set(io.get() + drift); lastChange = now; corrections++; if (calm) logStep(`moved while calm (${Math.round(drift)}px) → put back`); if (corrections <= 6 || corrections % 20 === 0) logStep(`corrected drift ${Math.round(drift)}px`); }
         }
-        if (chat.scrollHeight !== lastHeight) { lastHeight = chat.scrollHeight; lastChange = now; }
+        if (sc.scrollHeight !== lastHeight) { lastHeight = sc.scrollHeight; lastChange = now; }
         raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -626,9 +707,34 @@ function missingBefore(i) {
     return Number.isFinite(first) && first > i ? first - i : 0;
 }
 
+/** Id of the message at the top of the chat view right now. */
+function viewMesId() {
+    const chat = $id('chat');
+    if (!chat) return null;
+    const top = chat.getBoundingClientRect().top;
+    const list = chat.querySelectorAll('.mes[mesid]');
+    // binary search: messages are in order
+    let lo = 0, hi = list.length - 1, found = null;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (list[mid].getBoundingClientRect().bottom > top + 1) { found = list[mid]; hi = mid - 1; } else lo = mid + 1;
+    }
+    return found ? Number(found.getAttribute('mesid')) : null;
+}
+
+/** Far enough from what is on screen that the reading window is the better first step. */
+function isFar(i) {
+    if (missingBefore(i) >= READER_MIN_MISSING) return true;
+    const v = viewMesId();
+    return v !== null && Math.abs(v - i) >= READER_MIN_MISSING;
+}
+
 async function jumpTo(i, noteId = null, query = '') {
     if (jumpBusy) { toastr.info('🦊 아직 앞쪽 페이지를 넘기는 중이에요. 조금만 기다려 주세요.', '', { timeOut: 2000, preventDuplicates: true }); return; }
+    releaseHold?.('new jump');
+    releaseGuard?.('new jump');
     const missing = missingBefore(i);
+    jumpLog = { v: VERSION, t0: Date.now(), at: new Date().toISOString(), target: i, missing, view: viewMesId(), rendered: document.querySelectorAll('#chat .mes').length, chatLen: ctx().chat?.length, mobile: isMobile(), ua: navigator.userAgent.slice(0, 120), steps: [], blocked: 0, who: [] };
     let busyToast = null;
     if (missing > 120) busyToast = toastr.info(`메시지 ${missing}개를 불러와서 그 위치로 가는 중이에요. 화면이 잠깐 멈춰도 기다려 주세요.`, '🦊 앞쪽 페이지를 넘기는 중…', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
     jumpBusy = true;
@@ -636,19 +742,21 @@ async function jumpTo(i, noteId = null, query = '') {
     if (isMobile() && panelOpen()) closePanel();
     if (busyToast) await sleep(80); // let the notice paint before the heavy loading freezes the screen
     let el;
-    try { el = await ensureRendered(i); } catch { el = null; } finally { jumpBusy = false; if (busyToast) toastr.clear(busyToast); }
+    try { el = await ensureRendered(i); } catch (err) { el = null; logStep(`load error: ${err?.message || err}`); } finally { jumpBusy = false; if (busyToast) toastr.clear(busyToast); }
+    logStep(el ? `message drawn (${document.querySelectorAll('#chat .mes').length} on screen)` : 'message could not be drawn');
     if (!el) {
+        jumpLog.end = 'not drawn';
         toastr.warning('옛날 메시지를 끝까지 불러오지 못했어요. 눌러서 미리 읽기 창으로 볼 수 있어요.', '', { timeOut: 7000, onclick: () => openReader(i, { noteId, query }) });
         return;
     }
     decorateMessage(i);
-    decorateChapters();
     const q = String(query || '').trim().toLowerCase();
     const resolve = () => jumpTarget(i, noteId, noteId ? '' : q);
     resolve(); // unfold before measuring
     if (isMobile() && panelOpen()) closePanel();
-    await settle(el);
-    scrollAndHold(resolve);
+    // go there at once — don't wait for frames / other extensions to finish; the hold corrects as things settle
+    scrollAndHold(resolve, { reload: () => ensureRendered(i, { timeout: 20000 }).catch(() => null) });
+    setTimeout(() => { try { decorateChapters(); } catch { /* ignore */ } }, 0);
     const flashEl = resolve();
     if (flashEl) {
         flashEl.classList.remove('stbs-flash');
@@ -656,6 +764,34 @@ async function jumpTo(i, noteId = null, query = '') {
         flashEl.classList.add('stbs-flash');
         setTimeout(() => flashEl.classList.remove('stbs-flash'), 1800);
     }
+}
+
+function jumpReport() {
+    if (!jumpLog) return '아직 이동한 기록이 없어요. 검색 결과나 책갈피를 눌러 이동한 뒤 다시 열어 주세요.';
+    const L = jumpLog;
+    return [
+        `책 먹는 여우 v${L.v} · 이동 기록 ${L.at}`,
+        `목표 #${L.target} · 이동 전 화면 #${L.view} · 그려진 메시지 ${L.rendered}/${L.chatLen} · 안 그려진 앞쪽 ${L.missing}개 · ${L.mobile ? '모바일' : 'PC'}`,
+        `스크롤 칸: ${L.scroller || '-'} · 결과: ${L.end || '진행 중'} · 위치 ${JSON.stringify(L.final ?? '-')} · 보정 ${L.corrections ?? 0}번`,
+        `막은 다른 스크롤 ${L.blocked}번${L.who.length ? ':\n  ' + L.who.join('\n  ') : ''}`,
+        '— 단계 —', ...L.steps,
+        `UA: ${L.ua}`,
+    ].join('\n');
+}
+
+function openJumpReport() {
+    const text = jumpReport();
+    const body = openModal('🦊 마지막 이동 기록', `
+        <div class="stbs-hint">이동이 이상할 때 이 내용을 복사해서 보내 주면 원인을 찾을 수 있어요.</div>
+        <textarea class="text_pole stbs-report" readonly rows="14">${esc(text)}</textarea>
+        <div class="stbs-row stbs-end stbs-wrap">
+            <div class="stbs-btn" data-act="modal-close">닫기</div>
+            <div class="stbs-btn stbs-primary" id="stbs-report-copy"><i class="fa-solid fa-copy"></i> 복사</div>
+        </div>`, { wide: true });
+    body.querySelector('#stbs-report-copy').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(text); toastr.success('복사했어요.'); }
+        catch { const ta = body.querySelector('textarea'); ta.select(); document.execCommand('copy'); toastr.success('복사했어요.'); }
+    });
 }
 
 // ---------------------------------------------------------------- actions
@@ -2632,7 +2768,7 @@ async function onPanelClick(e) {
     const jump = e.target.closest('[data-jump]');
     if (jump) {
         const i = Number(jump.dataset.jump), noteId = jump.dataset.note || null, q = ui.tab === 'search' ? ui.q : '';
-        if (settings().farReader && missingBefore(i) >= READER_MIN_MISSING) openReader(i, { noteId, query: q });
+        if (settings().farReader && isFar(i)) openReader(i, { noteId, query: q });
         else jumpTo(i, noteId, q);
     }
 }
@@ -2764,7 +2900,7 @@ function buildSettingsUI() {
     <div id="stbs-settings" class="extension_settings">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b class="stbs-set-title">${FOX_SVG} ${APP_NAME}</b>
+                <b class="stbs-set-title">${FOX_SVG} ${APP_NAME} <small class="stbs-ver">v${VERSION}</small></b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
@@ -2780,6 +2916,7 @@ function buildSettingsUI() {
                     <select class="text_pole stbs-select" data-set-theme>${Object.entries(PANEL_THEMES).map(([k, v]) => `<option value="${k}" ${s.theme === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
                 </div>
                 <div class="menu_button stbs-wide-btn" id="stbs-reset-pos"><i class="fa-solid fa-arrows-to-dot"></i> 패널 위치·크기 초기화</div>
+                <div class="menu_button stbs-wide-btn" id="stbs-jump-report"><i class="fa-solid fa-clipboard-list"></i> 마지막 이동 기록 보기</div>
                 <div class="stbs-set-row"><span>형광펜 색상</span>
                     ${s.colors.map((c, k) => `<input type="color" data-color-set="${k}" value="${esc(c)}" title="${COLOR_NAMES[k]}">`).join('')}
                     <div class="menu_button stbs-mini" id="stbs-color-reset" title="기본 색으로">↺</div>
@@ -2818,6 +2955,7 @@ function buildSettingsUI() {
         saveSettings();
     });
     root.querySelector('#stbs-open-from-settings').addEventListener('click', () => openPanel());
+    root.querySelector('#stbs-jump-report').addEventListener('click', () => openJumpReport());
     root.querySelector('[data-set-theme]').addEventListener('change', (e) => {
         s.theme = e.target.value;
         saveSettings();
@@ -2852,13 +2990,13 @@ function registerCommands() {
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: 'bookfox',
             aliases: ['bookshelf'],
-            callback: (_args, value) => { openPanel(String(value ?? '').trim() || undefined); return ''; },
+            callback: (_args, value) => { const v = String(value ?? '').trim(); if (v === 'debug') openJumpReport(); else openPanel(v || undefined); return ''; },
             returns: 'nothing',
             unnamedArgumentList: [SlashCommandArgument.fromProps({
-                description: 'tab: toc | bookmarks | notes | search | stats | trash',
+                description: 'tab: toc | bookmarks | notes | search | stats | trash (debug = last jump log)',
                 typeList: [ARGUMENT_TYPE.STRING],
                 isRequired: false,
-                enumList: [...TABS.map(t => t[0]), 'trash'],
+                enumList: [...TABS.map(t => t[0]), 'trash', 'debug'],
             })],
             helpString: '<div>책 먹는 여우 독서 패널을 엽니다. 예: <code>/bookfox notes</code></div>',
         }));
@@ -2898,6 +3036,8 @@ function onChatChanged() {
 function bindGlobal() {
     const { eventSource, event_types: E } = ctx();
     eventSource.on(E.CHAT_CHANGED, onChatChanged);
+    // the user is writing / a reply is coming: stop holding the old position so the chat can follow
+    for (const ev of [E.CHAT_CHANGED, E.MESSAGE_SENT, E.GENERATION_STARTED]) if (ev) eventSource.on(ev, () => { releaseHold?.('chat activity'); releaseGuard?.('chat activity'); });
     const one = (id) => { const i = Number(id); if (!isNaN(i)) { decorateMessage(i); if (data().chapters.some(c => c.mesId === i)) decorateChapters(); } };
     eventSource.on(E.CHARACTER_MESSAGE_RENDERED, one);
     eventSource.on(E.USER_MESSAGE_RENDERED, one);
