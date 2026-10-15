@@ -15,9 +15,17 @@ const DEFAULTS = Object.freeze({
     theme: 'auto',
     charsPerPage: 600,
     cardTheme: 'fox',
+    cardLayout: null,     // card design (see CARD_LAYOUTS); null = take over the old cardTheme
+    cardTints: {},
+    cardRatio: '4:5',
+    cardShow: null,
     cardFox: true,
     cardTransFirst: false,
     searchHidden: 'all',
+    dailyLine: true,      // today's line at the top of the panel
+    dailyHidden: {},      // chat id → day it was dismissed
+    bmSort: 'story',      // bookmarks: 'story' | 'mine'
+    summaryTint: 0,
     farReader: true,          // far-away (not yet drawn) messages open in a reading window first      // search: 'all' (hidden + shown) | 'shown' | 'hidden'
     panel: null,
     sheetH: 0.62,
@@ -28,7 +36,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
-const VERSION = '1.13.3';
+const VERSION = '1.15.0';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -49,24 +57,45 @@ function emptyState(title, sub = '', fox = true) {
 const COLOR_NAMES = ['노랑', '초록', '파랑', '분홍'];
 const COLOR_EMOJI = ['🟨', '🟩', '🟦', '🟪'];
 
-const CARD_THEMES = {
-    fox: { name: '여우', bg: ['#f7a261', '#d9622b'], fg: '#3b1f0e', sub: '#6e3a1a', accent: '#fff5e8' },
-    forest: { name: '밤숲', bg: ['#33402f', '#1a2419'], fg: '#f3ead9', sub: '#b6c2a4', accent: '#f08a3c' },
-    paper: { name: '종이', bg: ['#f7f1e3', '#efe6d2'], fg: '#3b3226', sub: '#8a7a62', accent: '#c9a96e' },
-    night: { name: '밤하늘', bg: ['#1d2340', '#0e1226'], fg: '#eef0ff', sub: '#9aa3d4', accent: '#f5d67b' },
-    rose: { name: '장미', bg: ['#fde2e4', '#f9c5cf'], fg: '#5a2a35', sub: '#a0616f', accent: '#d9667f' },
-    mint: { name: '민트', bg: ['#e3f6ef', '#c7ecdf'], fg: '#1f4b3f', sub: '#5f8f80', accent: '#3aa585' },
-    ink: { name: '먹', bg: ['#2b2b2b', '#161616'], fg: '#f3f3f3', sub: '#a8a8a8', accent: '#e85d4a' },
-    // community-post look: the quote as a hot post, with upvotes and reaction comments
-    commu: {
-        name: '커뮤 반응', commu: true, bg: ['#eef0f3', '#ffffff'], fg: '#1f2329', sub: '#7b828c', accent: '#ff6b3d',
-        card: '#ffffff', line: '#e4e7eb', box: '#f5f6f8', best: '#fff0e8', up: '#ff6b3d', soft: '#ffe3d6',
-    },
-    commuDark: {
-        name: '커뮤 다크', commu: true, bg: ['#15171b', '#2a2e35'], fg: '#eceef1', sub: '#8d949e', accent: '#ff8a5c',
-        card: '#1f2228', line: '#30343c', box: '#272b32', best: '#3a2a23', up: '#ff8a5c', soft: '#4a3128',
-    },
+// Card designs: each is a layout (how the page is built) with a few colour sets (tints).
+const CARD_COMMU = {
+    light: { name: '밝게', commu: true, bg: ['#eef0f3', '#ffffff'], fg: '#1f2329', sub: '#7b828c', accent: '#ff6b3d', card: '#ffffff', line: '#e4e7eb', box: '#f5f6f8', best: '#fff0e8', up: '#ff6b3d', soft: '#ffe3d6' },
+    dark: { name: '어둡게', commu: true, bg: ['#15171b', '#2a2e35'], fg: '#eceef1', sub: '#8d949e', accent: '#ff8a5c', card: '#1f2228', line: '#30343c', box: '#272b32', best: '#3a2a23', up: '#ff8a5c', soft: '#4a3128' },
 };
+const CARD_LAYOUTS = {
+    underline: { name: '밑줄', tints: [
+        { name: '하양', bg: '#fbfaf7', fg: '#26231f', sub: '#857e74', cover: '#e9e4da' },
+        { name: '모래', bg: '#ece5d8', fg: '#2b2620', sub: '#7f7465', cover: '#dcd2c0' },
+        { name: '밤', bg: '#1f1e23', fg: '#efede9', sub: '#9c99a3', cover: '#2e2d33', dark: true },
+    ] },
+    page: { name: '책 한 쪽', tints: [
+        { name: '미색', bg: '#f4eee1', fg: '#2f2a22', sub: '#968b77' },
+        { name: '하양', bg: '#fbfbf8', fg: '#2a2a28', sub: '#979792' },
+        { name: '밤', bg: '#24221f', fg: '#e8e1d3', sub: '#8f877a', dark: true },
+    ] },
+    subtitle: { name: '자막', tints: [
+        { name: '검정', veil: '0,0,0', fg: '#ffffff', tr: '#f2d479', sub: '#c9c9c9' },
+        { name: '남색', veil: '10,16,38', fg: '#ffffff', tr: '#a9c4ff', sub: '#b9c2d8' },
+        { name: '세피아', veil: '38,22,8', fg: '#fff8ee', tr: '#f6c48f', sub: '#d8c4ad' },
+    ] },
+    chat: { name: '말풍선', tints: [
+        { name: '하늘', bg: '#d6e2ec', bubble: '#ffffff', fg: '#1f2328', sub: '#5f6b77', pill: 'rgba(31,35,40,.09)', tr: '#f3f6f9' },
+        { name: '복숭아', bg: '#f5ded2', bubble: '#ffffff', fg: '#2a1f1a', sub: '#7d6559', pill: 'rgba(42,31,26,.09)', tr: '#fbf3ee' },
+        { name: '밤', bg: '#1b1e23', bubble: '#2d3239', fg: '#eceef1', sub: '#8d949e', pill: 'rgba(255,255,255,.09)', tr: '#252a30', dark: true },
+    ] },
+    poster: { name: '포스터', tints: [
+        { name: '여우', bg: '#e8743b', fg: '#2a1408', sub: '#5e2a10', mark: '#fff1e4' },
+        { name: '숲', bg: '#26332a', fg: '#eef0e6', sub: '#a9b8a2', mark: '#e8913f' },
+        { name: '밤하늘', bg: '#1b2140', fg: '#eef0ff', sub: '#9aa3d4', mark: '#f2cf6c' },
+        { name: '먹', bg: '#161616', fg: '#f4f4f4', sub: '#9a9a9a', mark: '#e5533d' },
+        { name: '장미', bg: '#f4cbd3', fg: '#4b1f2a', sub: '#8c4e61', mark: '#c94a68' },
+        { name: '민트', bg: '#cfeee2', fg: '#16392f', sub: '#4a7d6f', mark: '#2b9a77' },
+    ] },
+    commu: { name: '커뮤 반응', tints: [CARD_COMMU.light, CARD_COMMU.dark] },
+};
+// cards made before v1.14 remember an old theme name
+const OLD_CARD_THEMES = { fox: ['poster', 0], forest: ['poster', 1], night: ['poster', 2], ink: ['poster', 3], rose: ['poster', 4], mint: ['poster', 5], paper: ['page', 0], commu: ['commu', 0], commuDark: ['commu', 1] };
+const CARD_RATIOS = { '4:5': 1350, '1:1': 1080, '9:16': 1920 };
 
 // Reaction pools for the community card (picked with a seed, so a card looks the same each time)
 const COMMU_TITLES = ['이 대사 뭐냐 진짜', '오늘자 명대사 박제함', '와 이 장면 미쳤다', '이거 보고 잠 다 깸', '나만 이 대사에 치였냐',
@@ -1213,7 +1242,7 @@ function openModal(title, bodyHtml, { wide = false } = {}) {
     const wrap = themed(document.createElement('div'));
     wrap.id = 'stbs-modal';
     wrap.innerHTML = `
-        <div class="stbs-modal-box ${wide ? 'wide' : ''}" role="dialog">
+        <div class="stbs-modal-box ${wide ? 'wide' : ''} ${wide === 'x' ? 'xwide' : ''}" role="dialog">
             <div class="stbs-modal-head"><b>${title}</b><div class="stbs-icon-btn fa-solid fa-xmark" data-act="modal-close" title="닫기"></div></div>
             <div class="stbs-modal-body">${bodyHtml}</div>
         </div>`;
@@ -1262,12 +1291,20 @@ function openMemoEditor({ note = null, pending = null, mesId = null }) {
     const body = openModal('독서노트', `
         ${quoteHtml}
         <textarea id="stbs-memo-input" class="text_pole stbs-textarea" rows="6" placeholder="이 문장에 대한 생각을 남겨보세요">${esc(note?.memo ?? '')}</textarea>
+        <div class="stbs-hint"><b>#설렘</b>처럼 #을 붙여 쓰면 태그가 돼요. 태그로 노트를 모아 볼 수 있어요.</div>
+        ${allTags().length ? `<div class="stbs-row stbs-wrap stbs-tag-row">${allTags().slice(0, 14).map(([t]) => `<span class="stbs-tag" data-addtag="${esc(t)}">#${esc(t)}</span>`).join('')}</div>` : ''}
         <div class="stbs-row stbs-end">
             <div class="stbs-btn" data-act="modal-close">취소</div>
             <div class="stbs-btn stbs-primary" id="stbs-memo-save">저장</div>
         </div>`);
     const ta = body.querySelector('#stbs-memo-input');
     setTimeout(() => ta.focus(), 30);
+    body.addEventListener('click', (e) => {
+        const t = e.target.closest('[data-addtag]')?.dataset.addtag;
+        if (!t) return;
+        if (!noteTags({ memo: ta.value }).includes(t)) ta.value = `${ta.value.replace(/\s+$/, '')}${ta.value.trim() ? ' ' : ''}#${t} `;
+        ta.focus();
+    });
     body.querySelector('#stbs-memo-save').addEventListener('click', () => {
         const memo = ta.value.trim();
         if (note) updateNote(note.id, { memo });
@@ -1507,9 +1544,7 @@ const kNum = (n) => n >= 10000 ? `${(n / 10000).toFixed(1).replace(/\.0$/, '')}�
 
 /** Community theme: the quote as a hot post on an invented board, with upvotes and reactions. */
 function drawCommunity(canvas, { text, trans = '', transFirst = false, who, chapter, commu = {} }, t) {
-    const W = 1080, H = 1350;
-    canvas.width = W;
-    canvas.height = H;
+    const W = canvas.width, H = canvas.height;
     const g = canvas.getContext('2d');
     const read = `${pageFonts().readFont}, sans-serif`;
     const ui = `${pageFonts().uiFont}, sans-serif`;
@@ -1687,102 +1722,334 @@ function drawCommunity(canvas, { text, trans = '', transFirst = false, who, chap
     }
 }
 
-function drawCard(canvas, info, themeKey) {
-    const t = CARD_THEMES[themeKey] || CARD_THEMES.paper;
-    if (t.commu) return drawCommunity(canvas, info, t);
-    const { text, trans = '', transFirst = false, who, chapter, source } = info;
-    const W = 1080, H = 1350, PAD = 110;
-    canvas.width = W;
-    canvas.height = H;
-    const g = canvas.getContext('2d');
-    const grad = g.createLinearGradient(0, 0, W, H);
-    grad.addColorStop(0, t.bg[0]);
-    grad.addColorStop(1, t.bg[1]);
-    g.fillStyle = grad;
-    g.fillRect(0, 0, W, H);
+// ---- shared pieces for every card design
 
-    g.strokeStyle = t.accent;
-    g.globalAlpha = 0.5;
-    g.lineWidth = 3;
-    g.strokeRect(48, 48, W - 96, H - 96);
-    g.globalAlpha = 1;
-
-    // Card text uses the chat's own font (theme font), falling back to the system serif.
-    const serif = `${pageFonts().readFont}, serif`;
-    g.fillStyle = t.accent;
-    g.font = `bold 200px ${serif}`;
-    g.textBaseline = 'top';
-    g.fillText('“', PAD - 20, 90);
-
-    const main = String(text || '').trim(), sub = String(trans || '').trim();
-    const blocks = sub ? (transFirst ? [[sub, 1], [main, 0.74]] : [[main, 1], [sub, 0.74]]) : [[main, 1]];
-    const maxW = W - PAD * 2;
-    const areaTop = 330, areaBottom = H - 300, avail = areaBottom - areaTop;
-    const DIVIDE = 64;               // space for the line between original and translation
-    const PARA = 0.55;               // blank line = a little more than half a line
+/** Fit the quote (and its translation) into a box: the first block is the big one. */
+function fitQuote(g, { main, sub, transFirst = false, font, maxW, avail, max = 60, min = 22, lh = 1.6, subScale = 0.72, gap = 56, para = 0.55, prep = (s) => s }) {
+    main = String(main || '').trim(); sub = String(sub || '').trim();
+    const blocks = sub ? (transFirst ? [sub, main] : [main, sub]) : [main];
     const measure = (size) => {
-        let total = sub ? DIVIDE : 0;
-        const laid = blocks.map(([txt, scale]) => {
-            const fs = Math.round(size * scale), lh = fs * 1.6;
-            const lines = layoutBlock(g, txt, `${fs}px ${serif}`, maxW);
-            const h = lines.reduce((acc, l) => acc + (l === '' ? lh * PARA : lh), 0);
+        let total = sub ? gap : 0;
+        const laid = blocks.map((txt, k) => {
+            const small = k > 0;
+            const fs = Math.round(size * (small ? subScale : 1)), l = fs * lh;
+            g.font = font(fs, small);
+            const lines = wrapLines(g, prep(txt), maxW);
+            const h = lines.reduce((a, x) => a + (x === '' ? l * para : l), 0);
             total += h;
-            return { lines, fs, lh, h, scale };
+            return { lines, fs, lh: l, h, small };
         });
         return { laid, total };
     };
-    let size = 64, m;
-    for (; size >= 24; size -= 2) { m = measure(size); if (m.total <= avail) break; }
-    // still too long: cut each block to fit its share
+    let size = max, m;
+    for (; size >= min; size -= 2) { m = measure(size); if (m.total <= avail) break; }
     if (m.total > avail) {
-        let room = avail - (sub ? DIVIDE : 0);
+        const room = avail - (sub ? gap : 0);
         for (const b of m.laid) {
-            const share = room * (b.h / Math.max(1, m.total - (sub ? DIVIDE : 0)));
-            let h = 0, keep = [];
-            for (const l of b.lines) { const lh = l === '' ? b.lh * PARA : b.lh; if (h + lh > share) break; keep.push(l); h += lh; }
+            const share = room * (b.h / Math.max(1, m.total - (sub ? gap : 0)));
+            let h = 0; const keep = [];
+            for (const l of b.lines) { const x = l === '' ? b.lh * para : b.lh; if (h + x > share && keep.length) break; keep.push(l); h += x; }
+            while (keep.length && keep[keep.length - 1] === '') { keep.pop(); h -= b.lh * para; }
             if (keep.length < b.lines.length && keep.length) keep[keep.length - 1] = keep[keep.length - 1].replace(/.?$/, '…');
             b.lines = keep; b.h = h;
         }
-        m.total = m.laid.reduce((a2, b2) => a2 + b2.h, sub ? DIVIDE : 0);
+        m.total = m.laid.reduce((a, b) => a + b.h, sub ? gap : 0);
     }
-    let y = areaTop + (avail - m.total) / 2;
-    g.textBaseline = 'alphabetic';
-    m.laid.forEach((b, k) => {
-        g.font = `${b.fs}px ${serif}`;
-        g.fillStyle = b.scale < 1 ? t.sub : t.fg;
-        for (const l of b.lines) {
-            if (l === '') { y += b.lh * PARA; continue; }
-            g.fillText(l, PAD, y + b.fs);
-            y += b.lh;
-        }
-        if (sub && k === 0) {
-            g.fillStyle = t.accent;
-            g.globalAlpha = 0.7;
-            g.fillRect(PAD, y + DIVIDE / 2 - 1, 44, 3);
-            g.globalAlpha = 1;
-            y += DIVIDE;
-        }
-    });
+    m.gap = sub ? gap : 0; m.para = para;
+    return m;
+}
 
-    g.fillStyle = t.accent;
-    g.fillRect(PAD, H - 250, 70, 4);
-    g.fillStyle = t.fg;
-    g.font = `bold 40px ${serif}`;
-    if (who) g.fillText(`— ${who}`, PAD, H - 180);
-    g.fillStyle = t.sub;
-    g.font = `28px ${serif}`;
-    const foot = [chapter, source].filter(Boolean).join('  ·  ');
-    if (foot) g.fillText(clip(foot, 40), PAD, H - 128);
-    if (settings().cardFox && foxImage?.complete && foxImage.naturalWidth) {
-        const cx = W - PAD - 70, cy = H - 170;
-        g.fillStyle = '#fff5e8';
-        g.beginPath(); g.arc(cx, cy, 82, 0, Math.PI * 2); g.fill();
-        g.strokeStyle = t.accent === '#fff5e8' ? '#d9622b' : t.accent;
-        g.lineWidth = 5; g.stroke();
-        g.globalAlpha = 0.97;
-        g.drawImage(foxImage, cx - 64, cy - 60, 128, 128);
-        g.globalAlpha = 1;
+/** Draw fitted blocks from y. onLine(b, x, top, width, baseline) runs before each line (markers…). */
+function drawLaid(g, m, { x, y, w, align = 'left', color, subColor, font, justify = false, onLine, divider, only }) {
+    m.laid.forEach((b, k) => {
+        if (only !== undefined && only !== k) return;
+        g.font = font(b.fs, b.small);
+        b.lines.forEach((l, j) => {
+            if (l === '') { y += b.lh * m.para; return; }
+            const last = j === b.lines.length - 1 || b.lines[j + 1] === '';
+            const lw = g.measureText(l).width;
+            const lx = align === 'center' ? x + (w - lw) / 2 : align === 'right' ? x + w - lw : x;
+            const base = y + b.lh / 2 + b.fs * 0.36;
+            onLine?.(b, lx, y, lw, base);
+            g.font = font(b.fs, b.small);
+            g.fillStyle = b.small ? subColor : color;
+            const words = l.split(' ');
+            const plain = justify ? words.reduce((a, s) => a + g.measureText(s).width, 0) : 0;
+            const sp = justify && words.length > 1 ? (w - plain) / (words.length - 1) : 0;
+            // justify like a book, but never with holes wider than about one letter
+            if (justify && !last && words.length > 1 && sp < b.fs * 0.9) {
+                let cx = x;
+                for (const s of words) { g.fillText(s, cx, base); cx += g.measureText(s).width + sp; }
+            } else g.fillText(l, lx, base);
+            y += b.lh;
+        });
+        if (m.gap && k === 0) { divider?.(y + m.gap / 2); y += m.gap; }
+    });
+    return y;
+}
+
+function coverImage(g, img, x, y, w, h) {
+    const s = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+    const iw = img.naturalWidth * s, ih = img.naturalHeight * s;
+    // faces sit in the upper part of portraits
+    g.drawImage(img, x + (w - iw) / 2, y + (h - ih) * 0.22, iw, ih);
+}
+
+function foxStamp(g, cx, cy, r, ring) {
+    if (!(foxImage?.complete && foxImage.naturalWidth)) return;
+    g.save();
+    g.fillStyle = '#fff5e8';
+    g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+    if (ring) { g.strokeStyle = ring; g.lineWidth = Math.max(2, r * 0.07); g.stroke(); }
+    g.drawImage(foxImage, cx - r * 0.78, cy - r * 0.74, r * 1.56, r * 1.56);
+    g.restore();
+}
+
+/** Quotation mark drawn as a shape (the font's “ glyph is often missing or tiny). */
+function quoteMark(g, x, y, s, color) {
+    g.save();
+    g.fillStyle = color;
+    for (let k = 0; k < 2; k++) {
+        const r = s * 0.27, cx = x + r + k * s * 0.72, cy = y + s - r;
+        g.beginPath();
+        g.arc(cx, cy, r, 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.moveTo(cx - r, cy - r * 0.05);
+        g.quadraticCurveTo(cx - r * 1.05, cy - r * 2.1, cx + r * 0.85, cy - r * 2.75);
+        g.lineTo(cx + r * 1.05, cy - r * 2.35);
+        g.quadraticCurveTo(cx - r * 0.05, cy - r * 1.85, cx + r * 0.1, cy - r * 0.8);
+        g.closePath();
+        g.fill();
     }
+    g.restore();
+}
+
+function roundPath(g, x, y, w, h, r) {
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, w, h, r);
+    else rrect(g, x, y, w, h, Array.isArray(r) ? r[1] : r);
+}
+
+// ---- the designs
+
+function cardUnderline(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    const M = 96, ui = I.ui;
+    const hasCover = I.show.avatar && A.thumb;
+    const rowH = hasCover ? 132 : 84;
+    let tx = M;
+    if (hasCover) {
+        g.save();
+        g.shadowColor = 'rgba(0,0,0,.18)'; g.shadowBlur = 18; g.shadowOffsetY = 6;
+        g.fillStyle = t.cover; roundPath(g, M, M, 96, rowH, 10); g.fill();
+        g.restore();
+        g.save(); roundPath(g, M, M, 96, rowH, 10); g.clip(); coverImage(g, A.thumb, M, M, 96, rowH); g.restore();
+        tx = M + 96 + 30;
+    }
+    g.textBaseline = 'alphabetic';
+    g.fillStyle = t.fg; g.font = `700 36px ${ui}`;
+    g.fillText(fitText(g, I.title, W - tx - M), tx, M + (hasCover ? 54 : 34));
+    if (I.show.chapter && I.chapter) {
+        g.fillStyle = t.sub; g.font = `28px ${ui}`;
+        g.fillText(fitText(g, I.chapter, W - tx - M), tx, M + (hasCover ? 98 : 78));
+    }
+    const top = M + rowH + 72, bottom = H - M - 110, maxW = W - M * 2;
+    const font = (fs, small) => `${small ? 400 : 500} ${fs}px ${I.read}`;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 58, min: 24, lh: 1.8, subScale: 0.7, gap: 60 });
+    const r = seeded(I.seed);
+    const y0 = top + Math.max(0, bottom - top - m.total) * 0.42;
+    drawLaid(g, m, {
+        x: M, y: y0, w: maxW, color: t.fg, subColor: t.sub, font,
+        onLine: (b, lx, ly, lw, base) => {
+            if (b.small) return;
+            // a marker stroke: a little uneven, under the lower part of the letters
+            g.save();
+            g.globalAlpha = t.dark ? 0.42 : 0.6;
+            g.fillStyle = I.hl;
+            const j1 = (r() - 0.5) * 6, j2 = (r() - 0.5) * 6;
+            g.beginPath();
+            g.moveTo(lx - 8, base - b.fs * 0.5 + j1);
+            g.lineTo(lx + lw + 10, base - b.fs * 0.54 + j2);
+            g.lineTo(lx + lw + 6, base + b.fs * 0.2 + j2);
+            g.lineTo(lx - 6, base + b.fs * 0.24 + j1);
+            g.closePath(); g.fill();
+            g.restore();
+        },
+        divider: (dy) => { g.fillStyle = t.sub; g.globalAlpha = 0.5; g.fillRect(M, dy - 1, 48, 3); g.globalAlpha = 1; },
+    });
+    const fy = H - M;
+    if (I.show.who && I.who) { g.fillStyle = t.fg; g.font = `600 30px ${ui}`; g.fillText(fitText(g, I.who, maxW * 0.6), M, fy); }
+    let rx = W - M;
+    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `28px ${ui}`; const p = `p. ${I.page}`; const pw = g.measureText(p).width; g.fillText(p, rx - pw, fy); rx -= pw + 22; }
+    if (I.show.fox) foxStamp(g, rx - 24, fy - 10, 26);
+}
+
+function cardPage(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    // the bound edge of a book page
+    const sp = g.createLinearGradient(0, 0, 90, 0);
+    sp.addColorStop(0, t.dark ? 'rgba(0,0,0,.45)' : 'rgba(60,40,10,.13)');
+    sp.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = sp; g.fillRect(0, 0, 90, H);
+    const M = 110, ui = I.ui, maxW = W - M * 2;
+    g.textBaseline = 'alphabetic';
+    g.fillStyle = t.sub; g.font = `26px ${ui}`;
+    g.fillText(fitText(g, I.title, maxW / 2 - 20), M, 100);
+    if (I.show.chapter && I.chapter) { const c = fitText(g, I.chapter, maxW / 2 - 20); g.fillText(c, W - M - g.measureText(c).width, 100); }
+    const top = 190, bottom = H - 230;
+    const font = (fs) => `${fs}px ${I.read}`;
+    const indent = (s) => String(s).split('\n').map(l => l.trim() ? '　' + l.trim() : l).join('\n');
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top - 70, max: 50, min: 22, lh: 1.9, subScale: 0.8, gap: 52, prep: indent });
+    let y = top + Math.max(0, bottom - top - 70 - m.total) / 2;
+    y = drawLaid(g, m, { x: M, y, w: maxW, color: t.fg, subColor: t.sub, font, justify: true,
+        divider: (dy) => { g.fillStyle = t.sub; g.font = `24px ${I.read}`; const s = '*'; g.fillText(s, (W - g.measureText(s).width) / 2, dy + 10); } });
+    if (I.show.who && I.who) { g.fillStyle = t.sub; g.font = `italic 28px ${I.read}`; const s = `— ${I.who}`; g.fillText(s, W - M - g.measureText(s).width, y + 52); }
+    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `30px ${ui}`; const p = String(I.page); g.fillText(p, (W - g.measureText(p).width) / 2, H - 92); }
+    if (I.show.fox) foxStamp(g, W - M + 20, H - 102, 24);
+}
+
+function cardSubtitle(g, W, H, I, t, A) {
+    const bar = Math.round(H * 0.075);
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    const img = I.show.avatar ? (A.full || A.thumb) : null;
+    if (img) { g.save(); g.beginPath(); g.rect(0, bar, W, H - bar * 2); g.clip(); coverImage(g, img, 0, bar, W, H - bar * 2); g.restore(); }
+    else { const rg = g.createRadialGradient(W * 0.5, H * 0.35, 40, W * 0.5, H * 0.45, H * 0.75); rg.addColorStop(0, `rgba(${t.veil},.2)`); rg.addColorStop(0, '#3a3f4a'); rg.addColorStop(1, `rgb(${t.veil})`); g.fillStyle = rg; g.fillRect(0, bar, W, H - bar * 2); }
+    const vg = g.createLinearGradient(0, bar, 0, H - bar);
+    vg.addColorStop(0, `rgba(${t.veil},.18)`); vg.addColorStop(0.45, `rgba(${t.veil},.3)`); vg.addColorStop(1, `rgba(${t.veil},.9)`);
+    g.fillStyle = vg; g.fillRect(0, bar, W, H - bar * 2);
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, bar); g.fillRect(0, H - bar, W, bar);
+    const ui = I.ui;
+    g.textBaseline = 'alphabetic';
+    if (I.show.chapter && I.chapter) { g.fillStyle = '#9a9a9a'; g.font = `24px ${ui}`; g.fillText(fitText(g, I.chapter, W - 260), 64, bar * 0.62); }
+    if (I.show.fox) foxStamp(g, W - 70, bar * 0.5, bar * 0.3);
+    const maxW = W - 180;
+    const font = (fs, small) => `${small ? 500 : 600} ${fs}px ${ui}`;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: H * 0.4, max: 50, min: 24, lh: 1.5, subScale: 0.74, gap: 26 });
+    let y = H - bar - 96 - m.total;
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,.7)'; g.shadowBlur = 14; g.shadowOffsetY = 2;
+    if (I.show.who && I.who) { g.fillStyle = t.sub; g.font = `500 28px ${ui}`; const s = fitText(g, I.who, maxW); g.fillText(s, (W - g.measureText(s).width) / 2, y - 30); }
+    drawLaid(g, m, { x: 90, y, w: maxW, align: 'center', color: t.fg, subColor: t.tr, font });
+    g.restore();
+}
+
+function cardChat(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    const M = 72, ui = I.ui, d = 112, pad = 34;
+    const bx = M + d + 26, bubbleMax = W - bx - M - 40;
+    const font = (fs) => `${fs}px ${I.read}`;
+    const pillH = I.show.chapter && I.chapter ? 56 : 0;
+    const nameH = I.show.who && I.who ? 50 : 0;
+    const avail = H - M * 2 - pillH - 70 - nameH - pad * 2 * (I.trans ? 2 : 1) - (I.trans ? 22 : 0) - 60;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW: bubbleMax - pad * 2, avail, max: 44, min: 22, lh: 1.6, subScale: 0.86, gap: 0 });
+    const sizes = m.laid.map(b => {
+        g.font = font(b.fs);
+        const w = Math.max(...b.lines.map(l => (l ? g.measureText(l).width : 0)), 40);
+        return { w: Math.min(bubbleMax, w + pad * 2), h: b.h + pad * 2 - (b.lh - b.fs * 1.25) };
+    });
+    const groupH = nameH + sizes.reduce((a, s) => a + s.h, 0) + (sizes.length - 1) * 18;
+    const total = (pillH ? pillH + 64 : 0) + Math.max(d, groupH);
+    let y = Math.max(M, (H - total) / 2);
+    g.textBaseline = 'alphabetic';
+    if (pillH) {
+        g.font = `500 24px ${ui}`;
+        const s = fitText(g, I.chapter, W - M * 2 - 60), pw = g.measureText(s).width + 48;
+        g.fillStyle = t.pill; roundPath(g, (W - pw) / 2, y, pw, pillH, pillH / 2); g.fill();
+        g.fillStyle = t.sub; g.fillText(s, (W - pw) / 2 + 24, y + pillH / 2 + 9);
+        y += pillH + 64;
+    }
+    // avatar
+    g.save(); g.beginPath(); g.arc(M + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); g.clip();
+    if (I.show.avatar && A.thumb) coverImage(g, A.thumb, M, y, d, d);
+    else { g.fillStyle = t.dark ? '#3a4048' : '#ffffff'; g.fillRect(M, y, d, d); if (I.who) { g.fillStyle = t.sub; g.font = `700 44px ${ui}`; const c = [...I.who][0]; g.fillText(c, M + (d - g.measureText(c).width) / 2, y + d / 2 + 16); } }
+    g.restore();
+    if (nameH) { g.fillStyle = t.fg; g.font = `600 30px ${ui}`; g.fillText(fitText(g, I.who, bubbleMax), bx, y + 30); }
+    let by = y + nameH;
+    m.laid.forEach((b, k) => {
+        const s = sizes[k];
+        g.fillStyle = k === 0 ? t.bubble : t.tr;
+        roundPath(g, bx, by, s.w, s.h, k === 0 ? [8, 36, 36, 36] : 36); g.fill();
+        drawLaid(g, { ...m, laid: [b], gap: 0 }, { x: bx + pad, y: by + pad - (b.lh - b.fs * 1.25) / 2, w: s.w - pad * 2, color: t.fg, subColor: t.sub, font });
+        if (k === m.laid.length - 1 && I.time) {
+            g.fillStyle = t.sub; g.font = `22px ${ui}`;
+            const tw = g.measureText(I.time).width;
+            if (bx + s.w + 14 + tw < W - 20) g.fillText(I.time, bx + s.w + 14, by + s.h - 6);
+            else g.fillText(I.time, bx + s.w - tw, by + s.h + 34);
+        }
+        by += s.h + 18;
+    });
+    if (I.show.fox) foxStamp(g, W - M, H - M, 28);
+}
+
+function cardPoster(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    const M = 100, ui = I.ui, maxW = W - M * 2;
+    quoteMark(g, M, M, 120, t.mark);
+    const footH = (I.show.who && I.who ? 46 : 0) + (I.show.chapter && I.chapter ? 40 : 0);
+    const top = M + 190, bottom = H - M - footH - 70;
+    const font = (fs, small) => `${small ? 500 : 800} ${fs}px ${ui}`;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 92, min: 34, lh: 1.32, subScale: 0.46, gap: 48 });
+    g.textBaseline = 'alphabetic';
+    const y = top + Math.max(0, bottom - top - m.total) * 0.45;
+    drawLaid(g, m, { x: M, y, w: maxW, color: t.fg, subColor: t.sub, font,
+        divider: (dy) => { g.fillStyle = t.mark; g.fillRect(M, dy - 2, 64, 5); } });
+    let fy = H - M;
+    if (I.show.chapter && I.chapter) { g.fillStyle = t.sub; g.font = `28px ${ui}`; g.fillText(fitText(g, I.chapter, maxW - 140), M, fy); fy -= 46; }
+    if (I.show.who && I.who) { g.fillStyle = t.fg; g.font = `700 36px ${ui}`; g.fillText(fitText(g, I.who, maxW - 140), M, fy); }
+    if (I.show.fox) foxStamp(g, W - M - 44, H - M - 30, 46, t.mark);
+}
+
+const CARD_DRAW = { underline: cardUnderline, page: cardPage, subtitle: cardSubtitle, chat: cardChat, poster: cardPoster };
+
+/** Draw a card. info: text, trans, transFirst, who, chapter, title, page, time, hl, show, commu, seed; assets: thumb/full images. */
+function drawCard(canvas, info, layoutKey = 'underline', tintIdx = 0, ratio = '4:5', assets = {}) {
+    const L = CARD_LAYOUTS[layoutKey] || CARD_LAYOUTS.underline;
+    const t = L.tints[tintIdx] || L.tints[0];
+    canvas.width = 1080;
+    canvas.height = CARD_RATIOS[ratio] || 1350;
+    if (t.commu) return drawCommunity(canvas, info, t);
+    const g = canvas.getContext('2d');
+    const f = pageFonts();
+    const I = { ...info, ui: `${f.uiFont}, sans-serif`, read: `${f.readFont}, sans-serif` };
+    I.show = { who: true, chapter: true, avatar: true, page: true, fox: true, ...(info.show || {}) };
+    (CARD_DRAW[layoutKey] || cardUnderline)(g, canvas.width, canvas.height, I, t, assets);
+    if (info.series) drawSeriesMark(g, canvas.width, canvas.height, layoutKey, t, info.series.k, info.series.n);
+}
+
+// ---- pictures for the cards: the speaker's avatar, as SillyTavern shows it
+const cardImages = new Map();
+function loadCardImage(url) {
+    if (!url) return Promise.resolve(null);
+    if (!cardImages.has(url)) cardImages.set(url, new Promise((res) => {
+        const im = new Image();
+        im.onload = () => res(im.naturalWidth ? im : null);
+        im.onerror = () => res(null);
+        im.src = url;
+    }));
+    return cardImages.get(url);
+}
+function avatarUrls(mesId) {
+    let thumb = document.querySelector(`#chat .mes[mesid="${mesId}"] .avatar img`)?.getAttribute('src') || '';
+    const m = msg(mesId), c = ctx();
+    if (!thumb && !m?.is_user) { const ch = c.characters?.[c.characterId]; if (ch?.avatar) thumb = `/thumbnail?type=avatar&file=${encodeURIComponent(ch.avatar)}`; }
+    if (!thumb) return { thumb: '', full: '' };
+    let full = '';
+    const q = thumb.match(/[?&]type=(avatar|persona)&file=([^&]+)/);
+    if (q) full = q[1] === 'avatar' ? `/characters/${q[2]}` : `/User%20Avatars/${q[2]}`;
+    return { thumb, full };
+}
+/** Which page of the "book" this message is on (same rule as the statistics: 1 page = N characters). */
+function pageOf(mesId) {
+    const chat = ctx().chat || [];
+    const per = Math.max(100, Number(settings().charsPerPage) || 600);
+    let n = 0;
+    for (let k = 0; k <= mesId && k < chat.length; k++) if (!isRealSystem(chat[k])) n += String(chat[k].mes || '').length;
+    return Math.max(1, Math.ceil(n / per));
+}
+function mesTime(mesId) {
+    const d = new Date(msg(mesId)?.send_date ?? NaN);
+    return isNaN(d) ? '' : d.toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
 }
 
 let foxImage = null;
@@ -1797,6 +2064,21 @@ function loadFoxImage() {
     });
 }
 
+function cardLayoutOf(s) {
+    if (!CARD_LAYOUTS[s.cardLayout]) {
+        const old = OLD_CARD_THEMES[s.cardTheme];
+        s.cardLayout = old ? old[0] : 'underline';
+        s.cardTints = { ...(s.cardTints || {}), [s.cardLayout]: old ? old[1] : 0 };
+    }
+    s.cardTints = { ...(s.cardTints || {}) };
+    s.cardShow = { who: true, chapter: true, avatar: true, page: true, fox: s.cardFox !== false, ...(s.cardShow || {}) };
+    if (!CARD_RATIOS[s.cardRatio]) s.cardRatio = '4:5';
+    return s.cardLayout;
+}
+
+const CARD_SHOW = [['who', '화자'], ['chapter', '챕터'], ['avatar', '프로필 사진'], ['page', '쪽수'], ['fox', '여우 도장']];
+const RATIO_NAMES = { '4:5': '4:5 피드', '1:1': '1:1 정사각', '9:16': '9:16 스토리' };
+
 function openCard({ text, trans = '', mesId, who, note = null }) {
     const s = settings();
     if (note) { mesId = note.mesId; text = noteText(note); trans = note.trans || ''; }
@@ -1807,8 +2089,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         if (!trans && m?.extra?.display_text && plainKeep(m.extra.display_text) !== text) trans = plainKeep(m.extra.display_text);
     }
     const original = text;
-    // The other language of this message (SillyTavern translate keeps the original in `mes`
-    // and shows extra.display_text), so the translation box can be filled in one tap.
+    // The other language of this message, so the translation box can be filled in one tap.
     let alt = '';
     if (m?.extra?.display_text) {
         const shown = plainKeep(m.extra.display_text), src = plainKeep(m.mes);
@@ -1816,115 +2097,171 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         alt = probe && oneParagraph(shown).includes(probe) ? src : shown;
         if (alt === text) alt = '';
     }
-    const ch = chapterOf(mesId);
-    const info = { text, who: who ?? speaker(mesId), chapter: sortedChapters().length ? chapterLabel(ch) : '', source: ctx().getCurrentChatId?.() || '' };
-    const themes = Object.entries(CARD_THEMES).map(([k, t]) =>
-        `<div class="stbs-chip ${k === s.cardTheme ? 'active' : ''}" data-theme="${k}"><span class="stbs-swatch" style="background:linear-gradient(135deg,${t.bg[0]},${t.bg[1]})"></span>${t.name}</div>`).join('');
+    let layout = cardLayoutOf(s);
+    const c = ctx();
+    const base = {
+        title: c.groupId ? (c.groups?.find?.(x => x.id === c.groupId)?.name || c.name2 || '') : (c.name2 || ''),
+        page: pageOf(mesId),
+        time: mesTime(mesId),
+        hl: s.colors[note?.color ?? 0] || s.colors[0] || '#ffe066',
+    };
+    const chapter0 = sortedChapters().length ? chapterLabel(chapterOf(mesId)) : '';
+    const who0 = who ?? speaker(mesId);
+    const urls = avatarUrls(mesId);
+    const assets = {};
+    const tileHtml = Object.entries(CARD_LAYOUTS).map(([k, L]) =>
+        `<button type="button" class="stbs-cx-lay ${k === layout ? 'active' : ''}" data-layout="${k}"><canvas class="stbs-cx-thumb" data-thumb="${k}" width="216" height="270"></canvas><span>${L.name}</span></button>`).join('');
     const body = openModal('명대사 카드', `
-        <div class="stbs-card-wrap"><canvas id="stbs-card-canvas"></canvas></div>
-        <div class="stbs-row stbs-wrap">${themes}</div>
-        <div class="stbs-row stbs-between stbs-wrap">
-            <label class="stbs-label">문장 <span class="stbs-dim">· 원문</span></label>
-            <div class="stbs-row stbs-wrap stbs-card-tools">
-                <div class="stbs-chip" data-break="keep" title="채팅에서 보이던 그대로">원문 줄바꿈</div>
-                <div class="stbs-chip" data-break="sentence" title="문장마다 줄을 바꿔요">문장마다</div>
-                <div class="stbs-chip" data-break="flow" title="줄바꿈 없이 한 덩어리로">한 문단</div>
+        <div class="stbs-cx">
+            <div class="stbs-cx-view"><canvas id="stbs-card-canvas"></canvas></div>
+            <div class="stbs-cx-side">
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-h">디자인</div>
+                    <div class="stbs-cx-lays">${tileHtml}</div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints" id="stbs-cx-tints"></div></div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg" id="stbs-cx-ratio">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
+                </section>
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-h stbs-between"><span>문장</span>
+                        <div class="stbs-seg stbs-seg-sm">
+                            <button type="button" data-break="keep" title="채팅에서 보이던 그대로">원문 줄바꿈</button>
+                            <button type="button" data-break="sentence" title="문장마다 줄을 바꿔요">문장마다</button>
+                            <button type="button" data-break="flow" title="줄바꿈 없이 한 덩어리로">한 문단</button>
+                        </div>
+                    </div>
+                    <textarea id="stbs-card-text" class="text_pole stbs-textarea" rows="4">${esc(text)}</textarea>
+                    <div class="stbs-hint">빈 줄을 넣으면 문단이 나뉘어요. 길면 글자가 알아서 작아져요.</div>
+                </section>
+                <details class="stbs-cx-sec stbs-cx-fold" ${trans ? 'open' : ''}>
+                    <summary class="stbs-cx-h">번역 함께 넣기 <span class="stbs-dim">선택</span></summary>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">순서</span><div class="stbs-seg stbs-seg-sm">
+                        <button type="button" data-order="orig" class="${s.cardTransFirst ? '' : 'active'}">원문이 위</button>
+                        <button type="button" data-order="trans" class="${s.cardTransFirst ? 'active' : ''}">번역이 위</button>
+                    </div></div>
+                    <textarea id="stbs-card-trans" class="text_pole stbs-textarea stbs-trans" rows="3" placeholder="여기 적은 문장이 작은 글씨로 함께 들어가요">${esc(trans)}</textarea>
+                    ${alt ? '<button type="button" class="stbs-chip" data-alt title="이 메시지의 다른 언어 전체를 넣어요. 필요한 부분만 남기세요."><i class="fa-solid fa-language"></i> 메시지의 다른 언어 불러오기</button>' : ''}
+                </details>
+                <section class="stbs-cx-sec stbs-commu-box" id="stbs-commu-box" hidden>
+                    <div class="stbs-cx-h stbs-between"><span>게시판 반응</span><button type="button" class="stbs-chip" data-reroll title="제목·댓글·숫자를 새로 뽑아요"><i class="fa-solid fa-dice"></i> 다시 뽑기</button></div>
+                    <input id="stbs-commu-title" class="text_pole" maxlength="40" placeholder="글 제목">
+                    <textarea id="stbs-commu-cm" class="text_pole stbs-textarea" rows="3" placeholder="댓글을 한 줄에 하나씩 (4개까지)"></textarea>
+                </section>
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-h">카드에 넣을 것</div>
+                    <div class="stbs-cx-checks">${CARD_SHOW.map(([k, n]) => `<button type="button" class="stbs-cx-check ${s.cardShow[k] ? 'on' : ''}" data-show="${k}" aria-pressed="${!!s.cardShow[k]}"><i class="fa-solid fa-check"></i>${n}</button>`).join('')}</div>
+                    <div class="stbs-cx-row2">
+                        <label><span>화자</span><input id="stbs-card-who" class="text_pole" value="${esc(who0)}"></label>
+                        <label><span>챕터 · 출처</span><input id="stbs-card-ch" class="text_pole" value="${esc(chapter0)}"></label>
+                    </div>
+                </section>
             </div>
-        </div>
-        <textarea id="stbs-card-text" class="text_pole stbs-textarea" rows="4">${esc(info.text)}</textarea>
-        <div class="stbs-hint">엔터로 줄을 바꾸고, 빈 줄을 넣으면 문단이 나뉘어요.</div>
-        <div class="stbs-row stbs-between stbs-wrap">
-            <label class="stbs-label">번역 <span class="stbs-dim">· 선택 (예: 영어 원문 아래 한국어)</span></label>
-            <div class="stbs-row stbs-wrap">
-                <div class="stbs-chip ${s.cardTransFirst ? '' : 'active'}" data-order="orig">원문 위</div>
-                <div class="stbs-chip ${s.cardTransFirst ? 'active' : ''}" data-order="trans">번역 위</div>
+            <div class="stbs-cx-foot">
+                <div class="stbs-btn" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
+                <div class="stbs-btn stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG로 저장</div>
             </div>
-        </div>
-        <textarea id="stbs-card-trans" class="text_pole stbs-textarea stbs-trans" rows="3" placeholder="번역 문장을 적으면 카드에 작게 함께 들어가요">${esc(trans)}</textarea>
-        ${alt ? `<div class="stbs-row stbs-wrap"><div class="stbs-chip" data-alt title="이 메시지의 다른 언어 전체를 넣어요. 필요한 부분만 남기세요."><i class="fa-solid fa-language"></i> 메시지의 다른 언어 불러오기</div></div>` : ''}
-        <div class="stbs-commu-box" id="stbs-commu-box" ${CARD_THEMES[s.cardTheme]?.commu ? '' : 'hidden'}>
-            <div class="stbs-row stbs-between stbs-wrap">
-                <label class="stbs-label">커뮤 반응 <span class="stbs-dim">· 글 제목과 댓글 (한 줄에 하나, 4개까지)</span></label>
-                <div class="stbs-chip" data-reroll title="제목·댓글·숫자를 새로 뽑아요"><i class="fa-solid fa-dice"></i> 다시 뽑기</div>
-            </div>
-            <input id="stbs-commu-title" class="text_pole" maxlength="40" placeholder="글 제목">
-            <textarea id="stbs-commu-cm" class="text_pole stbs-textarea" rows="3" placeholder="댓글 반응을 한 줄에 하나씩"></textarea>
-        </div>
-        <label class="checkbox_label stbs-inline"><input type="checkbox" id="stbs-card-fox" ${s.cardFox ? 'checked' : ''}> <span>여우 도장 찍기 <span class="stbs-dim">(커뮤 테마는 프로필 사진)</span></span></label>
-        <div class="stbs-row">
-            <input id="stbs-card-who" class="text_pole" placeholder="화자" value="${esc(info.who)}">
-            <input id="stbs-card-ch" class="text_pole" placeholder="챕터/출처" value="${esc(info.chapter)}">
-        </div>
-        <div class="stbs-row stbs-end">
-            <div class="stbs-btn" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
-            <div class="stbs-btn stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG 저장</div>
-        </div>`, { wide: true });
+        </div>`, { wide: 'x' });
     const canvas = body.querySelector('#stbs-card-canvas');
     const ta = body.querySelector('#stbs-card-text');
     const tr = body.querySelector('#stbs-card-trans');
-    let theme = s.cardTheme;
     const cTitle = body.querySelector('#stbs-commu-title');
     const cCm = body.querySelector('#stbs-commu-cm');
+    const whoIn = body.querySelector('#stbs-card-who');
+    const chIn = body.querySelector('#stbs-card-ch');
     let seed = parseInt(hash(String(text || '')).slice(0, 6), 36) || 7;
     const fillCommu = () => {
-        const dflt = commuDefaults(seed, body.querySelector('#stbs-card-who').value.trim());
+        const dflt = commuDefaults(seed, whoIn.value.trim());
         cTitle.value = dflt.title;
         cCm.value = dflt.comments.join('\n');
     };
-    const redraw = () => drawCard(canvas, {
+    const info = () => ({
+        ...base,
         text: ta.value,
         trans: tr.value,
         transFirst: !!s.cardTransFirst,
-        who: body.querySelector('#stbs-card-who').value.trim(),
-        chapter: body.querySelector('#stbs-card-ch').value.trim(),
-        source: '',
+        who: whoIn.value.trim(),
+        chapter: chIn.value.trim(),
+        show: s.cardShow,
+        seed,
         commu: { seed, title: cTitle.value.trim(), comments: cCm.value.split('\n') },
-    }, theme);
-    const redrawSoon = debounce(redraw, 150);
-    // keep a note's translation so the next card (and the notes list / export) has it too
+    });
+    const tint = (k) => s.cardTints[k] ?? 0;
+    const renderTints = () => {
+        body.querySelector('#stbs-cx-tints').innerHTML = CARD_LAYOUTS[layout].tints.map((t, k) => {
+            const sw = t.commu ? t.card : t.bg || `rgb(${t.veil})`;
+            const dot = t.mark || t.hl || t.fg;
+            return `<button type="button" class="stbs-cx-tint ${k === tint(layout) ? 'active' : ''}" data-tint="${k}" title="${t.name}"><span style="background:${sw}"><i style="background:${t.commu ? t.accent : dot}"></i></span>${t.name}</button>`;
+        }).join('');
+        body.querySelector('#stbs-commu-box').hidden = layout !== 'commu';
+    };
+    const ratioCss = () => canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[s.cardRatio]}`);
+    const redraw = () => { drawCard(canvas, info(), layout, tint(layout), s.cardRatio, assets); ratioCss(); };
+    // little live previews of every design, with this very text
+    const off = document.createElement('canvas');
+    const drawThumbs = () => {
+        const inf = info();
+        body.querySelectorAll('[data-thumb]').forEach(tc => {
+            const k = tc.dataset.thumb;
+            drawCard(off, inf, k, tint(k), '4:5', assets);
+            const tg = tc.getContext('2d');
+            tg.clearRect(0, 0, tc.width, tc.height);
+            tg.drawImage(off, 0, 0, tc.width, tc.height);
+        });
+    };
+    const redrawSoon = debounce(redraw, 120);
+    const thumbsSoon = debounce(drawThumbs, 900);
     const saveTrans = debounce(() => {
         if (!note || !getNote(note.id)) return;
         const v = tr.value.trim();
         if ((note.trans || '') !== v) { if (v) note.trans = v; else delete note.trans; persist(); refreshPanel(); }
     }, 500);
-    body.addEventListener('input', (e) => { redrawSoon(); if (e.target === tr) saveTrans(); });
-    body.querySelector('#stbs-card-fox').addEventListener('change', (e) => { s.cardFox = e.target.checked; saveSettings(); redraw(); });
+    body.addEventListener('input', (e) => { redrawSoon(); thumbsSoon(); if (e.target === tr) saveTrans(); });
     body.addEventListener('click', (e) => {
-        const chip = e.target.closest('[data-theme]');
-        if (chip) {
-            theme = chip.dataset.theme;
-            s.cardTheme = theme;
+        const lay = e.target.closest('[data-layout]');
+        if (lay) {
+            layout = lay.dataset.layout;
+            s.cardLayout = layout; saveSettings();
+            body.querySelectorAll('[data-layout]').forEach(x => x.classList.toggle('active', x === lay));
+            renderTints(); redraw();
+            return;
+        }
+        const tn = e.target.closest('[data-tint]');
+        if (tn) {
+            s.cardTints[layout] = Number(tn.dataset.tint); saveSettings();
+            renderTints(); redraw(); drawThumbs();
+            return;
+        }
+        const ra = e.target.closest('[data-ratio]');
+        if (ra) {
+            s.cardRatio = ra.dataset.ratio; saveSettings();
+            body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra));
+            redraw();
+            return;
+        }
+        const sh = e.target.closest('[data-show]');
+        if (sh) {
+            const k = sh.dataset.show;
+            s.cardShow[k] = !s.cardShow[k];
+            if (k === 'fox') s.cardFox = s.cardShow.fox;
             saveSettings();
-            body.querySelectorAll('[data-theme]').forEach(x => x.classList.toggle('active', x === chip));
-            body.querySelector('#stbs-commu-box').hidden = !CARD_THEMES[theme]?.commu;
-            redraw();
+            sh.classList.toggle('on', s.cardShow[k]); sh.setAttribute('aria-pressed', String(s.cardShow[k]));
+            redraw(); drawThumbs();
             return;
         }
-        if (e.target.closest('[data-reroll]')) {
-            seed = Math.floor(Math.random() * 1e9);
-            fillCommu();
-            redraw();
-            return;
-        }
+        if (e.target.closest('[data-reroll]')) { seed = Math.floor(Math.random() * 1e9); fillCommu(); redraw(); return; }
         const br = e.target.closest('[data-break]');
         if (br) {
             const mode = br.dataset.break;
             const apply = (v, orig) => mode === 'keep' ? orig : mode === 'sentence' ? sentencePerLine(v) : oneParagraph(v);
             ta.value = apply(ta.value, original);
             if (tr.value.trim()) tr.value = mode === 'keep' ? tr.value : apply(tr.value, tr.value);
-            redraw();
+            body.querySelectorAll('[data-break]').forEach(x => x.classList.toggle('active', x === br));
+            redraw(); thumbsSoon();
             return;
         }
-        if (e.target.closest('[data-alt]')) {
-            tr.value = alt;
-            saveTrans();
-            redraw();
-            return;
-        }
+        if (e.target.closest('[data-alt]')) { tr.value = alt; saveTrans(); redraw(); thumbsSoon(); return; }
         const ord = e.target.closest('[data-order]');
         if (ord) {
-            s.cardTransFirst = ord.dataset.order === 'trans';
-            saveSettings();
+            s.cardTransFirst = ord.dataset.order === 'trans'; saveSettings();
             body.querySelectorAll('[data-order]').forEach(x => x.classList.toggle('active', x === ord));
             redraw();
         }
@@ -1938,16 +2275,20 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
                 await navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]);
                 toastr.success('이미지를 복사했어요.');
             } catch {
-                toastr.warning('이 브라우저에서는 이미지 복사가 안 돼요. PNG 저장을 써주세요.');
+                toastr.warning('이 브라우저에서는 이미지 복사가 안 돼요. PNG로 저장을 써 주세요.');
             }
         }, 'image/png');
     });
     fillCommu();
+    renderTints();
+    redraw();
     Promise.all([
         loadFoxImage(),
+        loadCardImage(urls.thumb).then(im => { assets.thumb = im; }),
+        loadCardImage(urls.full).then(im => { assets.full = im; }),
         document.fonts?.ready?.catch?.(() => { }),
-    ]).then(redraw);
-    redraw();
+    ]).then(() => { if (canvas.isConnected) { redraw(); drawThumbs(); } });
+    setTimeout(drawThumbs, 30);
 }
 
 // ---------------------------------------------------------------- panel
@@ -1958,6 +2299,7 @@ const TABS = [
     ['notes', 'fa-highlighter', '독서노트'],
     ['search', 'fa-magnifying-glass', '검색'],
     ['stats', 'fa-chart-simple', '통계'],
+    ['library', 'fa-book-open-reader', '서재'],
 ];
 
 const ui = {
@@ -1972,6 +2314,10 @@ const ui = {
     selected: new Set(),
     trashFilter: 'all',
     prevTab: 'notes',
+    dailyShift: 0,
+    noteTag: '',
+    libQ: '', libKind: 'all', libTag: '', libOpen: null,
+    bmFold: new Set(),
 };
 
 // ---------------------------------------------------------------- rating & one-line review
@@ -2241,6 +2587,8 @@ function applyGeometry() {
 }
 
 function onPanelPointerDown(e) {
+    const grip = e.target.closest('[data-bmgrip]');
+    if (grip && e.button <= 0) { startBmDrag(e, grip); return; }
     const handle = e.target.closest('[data-drag]');
     if (!handle || e.target.closest('[data-act]') || e.button > 0) return;
     const p = $id('stbs-panel');
@@ -2377,14 +2725,23 @@ function renderPanel() {
     const body = $id('stbs-body');
     if (!body) return;
     document.querySelectorAll('#stbs-panel .stbs-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === ui.tab));
-    $id('stbs-chatname').textContent = hasChat() ? clip(ctx().getCurrentChatId(), 40) : '오늘의 책을 펼쳐 주세요';
+    // who you're reading with and how long the book is — the raw chat file name is hard to read
+    $id('stbs-chatname').textContent = hasChat() ? (() => {
+        const c = ctx();
+        const who = c.groupId ? (c.groups?.find?.(x => x.id === c.groupId)?.name || '그룹 채팅') : (c.name2 || '');
+        return clip([who, `메시지 ${(c.chat?.length || 0).toLocaleString()}개`].filter(Boolean).join(' · '), 40);
+    })() : '오늘의 책을 펼쳐 주세요';
+    $id('stbs-chatname').title = hasChat() ? ctx().getCurrentChatId() : '';
     if (!hasChat()) { body.innerHTML = emptyState('아직 펼친 책이 없어요', '채팅을 열면 여우가 함께 읽기 시작해요.'); return; }
     const scroll = body.scrollTop;
     const keepFocus = document.activeElement?.id === 'stbs-q';
+    const keepLib = document.activeElement?.id === 'stbs-lib-q' ? document.activeElement.selectionStart : null;
     updateTrashBadge();
     $id('stbs-panel')?.classList.toggle('in-trash', ui.tab === 'trash');
-    body.innerHTML = ({ toc: renderToc, bookmarks: renderBookmarks, notes: renderNotes, search: renderSearch, stats: renderStats, trash: renderTrash }[ui.tab] || renderNotes)();
+    const daily = ['notes', 'toc', 'bookmarks', 'stats'].includes(ui.tab) && !(ui.tab === 'notes' && ui.scrap) ? dailyHtml() : '';
+    body.innerHTML = daily + ({ toc: renderToc, bookmarks: renderBookmarks, notes: renderNotes, search: renderSearch, stats: renderStats, trash: renderTrash, library: renderLibrary }[ui.tab] || renderNotes)();
     body.scrollTop = scroll;
+    if (keepLib !== null) { const lq = $id('stbs-lib-q'); if (lq) { lq.focus(); lq.setSelectionRange(keepLib, keepLib); } }
     if (ui.tab === 'search') {
         const q = $id('stbs-q');
         if (keepFocus || !ui.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
@@ -2437,34 +2794,57 @@ function renderToc() {
                 <div class="stbs-meta">#${e.mesId}–#${Math.max(e.mesId, endId)} · 약 ${Math.max(1, Math.round(chars / cpp))}쪽${bm ? ` · 책갈피 ${bm}` : ''}${nt ? ` · 노트 ${nt}` : ''}</div>
             </div>
             ${isReal ? `<div class="stbs-actions">
+                <div class="stbs-icon-btn fa-regular fa-image" data-act="chapter-card" data-id="${e.id}" title="챕터 요약 카드"></div>
                 <div class="stbs-icon-btn fa-regular fa-star" data-act="rate" data-target="${e.id}" title="별점 · 한줄평"></div>
                 <div class="stbs-icon-btn fa-solid fa-pen" data-act="chapter-rename" data-id="${e.id}" title="이름 바꾸기"></div>
                 <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="chapter-del" data-id="${e.id}" title="삭제"></div>
-            </div>` : ''}
+            </div>` : `<div class="stbs-actions"><div class="stbs-icon-btn fa-regular fa-image" data-act="chapter-card" data-id="__prologue" title="요약 카드"></div></div>`}
         </div>`;
     });
     return html;
 }
 
 function renderBookmarks() {
-    const list = [...data().bookmarks].sort((a, b) => a.mesId - b.mesId);
-    if (!list.length) return emptyState('아직 꽂아 둔 책갈피가 없어요', '메시지 <i class="fa-solid fa-ellipsis"></i> 메뉴의 <i class="fa-solid fa-book-bookmark"></i> 버튼으로 꽂을 수 있어요.');
-    return `<div class="stbs-count">책갈피 ${list.length}개</div>` + groupByChapter(list, b => {
+    const all = data().bookmarks;
+    if (!all.length) return emptyState('아직 꽂아 둔 책갈피가 없어요', '메시지 <i class="fa-solid fa-ellipsis"></i> 메뉴의 <i class="fa-solid fa-book-bookmark"></i> 버튼으로 꽂을 수 있어요.');
+    const mine = settings().bmSort === 'mine';
+    if (mine) ensureBmOrder();
+    const sorter = mine ? (a, b) => (a.order ?? 0) - (b.order ?? 0) : (a, b) => a.mesId - b.mesId;
+    const item = (b) => {
         const text = plain(msg(b.mesId)?.mes);
         return `
-        <div class="stbs-item stbs-bm-item" data-jump="${b.mesId}">
-            <i class="fa-solid fa-bookmark stbs-bm-ico"></i>
+        <div class="stbs-item stbs-bm-item ${mine ? 'can-drag' : ''}" data-jump="${b.mesId}" data-bm="${b.id}">
+            ${mine ? '<span class="stbs-grip" data-bmgrip title="끌어서 순서 바꾸기"><i class="fa-solid fa-grip-vertical"></i></span>' : '<i class="fa-solid fa-bookmark stbs-bm-ico"></i>'}
             <div class="stbs-grow">
                 <div class="stbs-item-title">${esc(b.label || clip(text, 40))}</div>
                 ${b.label ? `<div class="stbs-snippet">${esc(clip(text, 120))}</div>` : ''}
                 ${metaLine(b.mesId, fmtDate(b.created))}
             </div>
             <div class="stbs-actions">
+                <div class="stbs-icon-btn fa-regular fa-folder" data-act="bm-folder" data-id="${b.id}" title="폴더에 넣기"></div>
                 <div class="stbs-icon-btn fa-solid fa-pen" data-act="bm-rename" data-id="${b.id}" title="이름 바꾸기"></div>
                 <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="bm-del" data-id="${b.id}" title="삭제"></div>
             </div>
         </div>`;
-    });
+    };
+    const folders = bmFolders(all);
+    let html = `<div class="stbs-row stbs-between stbs-wrap">
+        <span class="stbs-count">책갈피 ${all.length}개${folders.length ? ` · 폴더 ${folders.length}개` : ''}</span>
+        <div class="stbs-seg stbs-seg-sm"><button type="button" data-act="bm-sort" data-v="story" class="${mine ? '' : 'active'}">이야기 순</button><button type="button" data-act="bm-sort" data-v="mine" class="${mine ? 'active' : ''}">내 순서</button></div>
+    </div>`;
+    if (mine) html += '<div class="stbs-hint"><i class="fa-solid fa-grip-vertical"></i> 손잡이를 끌어 순서를 바꾸거나 다른 폴더로 옮겨요.</div>';
+    if (!folders.length && !mine) return html + groupByChapter([...all].sort(sorter), item);
+    const group = (name, list) => {
+        const shut = name && ui.bmFold.has(name);
+        return `<div class="stbs-bm-group ${shut ? 'shut' : ''}">
+            ${name ? `<div class="stbs-bm-group-head" data-act="bm-fold" data-f="${esc(name)}"><i class="fa-solid ${shut ? 'fa-folder' : 'fa-folder-open'}"></i><b>${esc(name)}</b><span class="stbs-dim">${list.length}</span><i class="fa-solid fa-chevron-down stbs-fold-caret"></i></div>` : (folders.length ? '<div class="stbs-bm-group-head is-loose"><i class="fa-regular fa-file"></i><b>폴더 없음</b></div>' : '')}
+            <div class="stbs-bm-list" data-folder="${esc(name)}">${shut ? '' : list.map(item).join('')}</div>
+        </div>`;
+    };
+    for (const f of folders) html += group(f, all.filter(b => b.folder === f).sort(sorter));
+    const loose = all.filter(b => !b.folder).sort(sorter);
+    if (loose.length || mine) html += group('', loose);
+    return html;
 }
 
 function noteCard(n, { inScrap = null } = {}) {
@@ -2481,7 +2861,7 @@ function noteCard(n, { inScrap = null } = {}) {
     <div class="stbs-note ${n.color == null ? 'no-color' : ''} ${sel ? 'selecting' : ''} ${on ? 'picked' : ''}" ${colorCss} data-jump="${n.mesId}" data-note="${n.id}">
         ${sel ? `<span class="stbs-check ${on ? 'on' : ''}"><i class="fa-solid fa-check"></i></span>` : ''}
         ${quote}
-        ${n.memo ? `<div class="stbs-note-memo">${esc(n.memo)}</div>` : ''}
+        ${n.memo ? `<div class="stbs-note-memo">${memoHtml(n.memo)}</div>` : ''}
         <div class="stbs-note-foot">
             <div class="stbs-meta">${esc(speaker(n.mesId))} · #${n.mesId} · ${fmtDate(n.updated)} ${stale}${!inScrap && inBooks.length ? ` <span class="stbs-badge">${esc(inBooks[0].emoji || '📒')} ${inBooks.length > 1 ? inBooks.length : esc(clip(inBooks[0].name, 8))}</span>` : ''}</div>
             ${sel ? '' : `<div class="stbs-actions">
@@ -2501,7 +2881,7 @@ function selectionBar() {
     return `<div class="stbs-selbar">
         <span class="stbs-selbar-count">${n ? `${n}개 골랐어요` : '노트를 눌러 골라요'}</span>
         <div class="stbs-btn ${n ? '' : 'disabled'}" data-act="sel-scrap"><i class="fa-solid fa-book-bookmark"></i> 스크랩북에 담기</div>
-        <div class="stbs-btn stbs-primary ${n ? '' : 'disabled'}" data-act="sel-card"><i class="fa-solid fa-quote-left"></i> 카드로 모으기</div>
+        <div class="stbs-btn stbs-primary ${n ? '' : 'disabled'}" data-act="sel-card"><i class="fa-solid fa-quote-left"></i> 카드 만들기</div>
         <div class="stbs-icon-btn fa-solid fa-xmark" data-act="sel-cancel" title="그만 고르기"></div>
     </div>`;
 }
@@ -2517,7 +2897,7 @@ function renderScrapView(sb) {
             <div class="stbs-icon-btn fa-solid fa-trash-can" data-act="scrap-del" data-id="${sb.id}" title="스크랩북 삭제"></div>
         </div>`;
     if (!notes.length) return html + emptyState('아직 빈 스크랩북이에요', '모든 노트에서 <b>고르기</b>를 눌러 노트를 담아 보세요.');
-    html += `<div class="stbs-btn stbs-wide-btn" data-act="scrap-card" data-id="${sb.id}"><i class="fa-solid fa-quote-left"></i> 이 스크랩북을 카드 한 장으로</div>`;
+    html += `<div class="stbs-btn stbs-wide-btn" data-act="scrap-card" data-id="${sb.id}"><i class="fa-solid fa-quote-left"></i> 이 스크랩북을 카드로</div>`;
     return html + notes.map(n => noteCard(n, { inScrap: sb })).join('');
 }
 
@@ -2534,11 +2914,13 @@ function renderNotes() {
     s.colors.forEach((_, k) => { counts[k] = all.filter(n => n.color === k).length; });
     const f = ui.noteFilter;
     let list = all.filter(n => f === 'all' ? true : f === 'none' ? n.color == null : f === 'memo' ? !!n.memo : n.color === Number(f));
+    if (ui.noteTag) list = list.filter(n => noteTags(n).includes(ui.noteTag));
+    const tags = allTags(all);
     list = ui.noteSort === 'story'
         ? list.sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1))
         : list.sort((a, b) => b.updated - a.updated);
 
-    let html = reviewStrip('book');
+    let html = reviewStrip('book', true);
     html += `<div class="stbs-shelf-head"><b>스크랩북</b>${d.scrapbooks.length ? `<span class="stbs-meta">${d.scrapbooks.length}권</span>` : ''}</div>
         <div class="stbs-shelf">
             ${d.scrapbooks.map(sb => `<div class="stbs-scrap-tile" data-act="scrap-open" data-id="${sb.id}"><span class="stbs-scrap-emoji">${esc(sb.emoji || '📒')}</span><b>${esc(sb.name)}</b><span class="stbs-meta">노트 ${scrapNotes(sb).length}</span></div>`).join('')}
@@ -2554,7 +2936,8 @@ function renderNotes() {
             ${counts.memo ? chip('memo', `메모 있는 것 ${counts.memo}`) : ''}
             <div class="stbs-chip stbs-sort" data-act="note-sort"><i class="fa-solid fa-arrow-down-wide-short"></i> ${ui.noteSort === 'story' ? '이야기 순' : '최근 순'}</div>
             ${all.length ? `<div class="stbs-chip ${ui.selecting ? 'active' : ''}" data-act="sel-mode"><i class="fa-regular fa-square-check"></i> 고르기</div>` : ''}
-        </div>`;
+        </div>
+        ${tags.length ? `<div class="stbs-row stbs-wrap stbs-tag-row">${tags.slice(0, 24).map(([t, c]) => `<span class="stbs-tag ${ui.noteTag === t ? 'on' : ''}" data-act="note-tag" data-tag="${esc(t)}">#${esc(t)} <span class="stbs-dim">${c}</span></span>`).join('')}</div>` : ''}`;
     if (!all.length) {
         return html + emptyState('여우가 맛있는 문장을 기다려요', '채팅에서 문장이나 문단을 드래그해 보세요.<br>형광펜을 칠하거나, 형광펜 없이 메모만 남길 수도 있어요.');
     }
@@ -2603,6 +2986,13 @@ function searchResults() {
         const nHidden = ctx().chat.filter(isHiddenMes).length;
         const sub = hs === 'hidden' ? '숨김 표시한 메시지에서만 찾아요.' : hs === 'shown' ? '숨김 표시한 메시지는 빼고 찾아요.' : '숨김 표시한 메시지까지 모두 찾아요.';
         return emptyState('무엇을 찾아볼까요?', `여우가 킁킁, 이 채팅 전체에서 찾아줄게요.<br>${sub}${nHidden ? ` <span class="stbs-dim">(숨긴 메시지 ${nHidden}개)</span>` : ''}`);
+    }
+    if (/^#[\p{L}\p{N}_]+$/u.test(q)) {
+        // #tag: the notes carrying that tag
+        const tag = q.slice(1);
+        const hits = data().notes.filter(n => noteTags(n).some(t => t.toLowerCase() === tag)).sort((a, b) => a.mesId - b.mesId);
+        if (!hits.length) return emptyState(`#${esc(tag)} 태그를 단 노트가 없어요`, '노트 메모에 #태그를 적으면 여기서 모아 볼 수 있어요.', false);
+        return `<div class="stbs-count">#${esc(tag)} 태그 노트 ${hits.length}개</div>` + hits.map(n => noteCard(n)).join('');
     }
     const chat = ctx().chat;
     const chapters = sortedChapters();
@@ -2715,6 +3105,7 @@ function renderStats() {
             </div>
             <span class="stbs-avatar lg">${FOX_SVG}</span>
         </div>
+        <div class="stbs-btn stbs-wide-btn stbs-ghost" data-act="stats-card"><i class="fa-regular fa-image"></i> 이 기록을 카드로 만들기</div>
         <div class="stbs-tiles">
             ${tile(fmt(st.count), '메시지')}
             ${tile(fmt(st.chars), '글자')}
@@ -2755,9 +3146,12 @@ const runSearch = debounce(() => {
     if (r) r.innerHTML = searchResults();
 }, 250);
 
+const runLibSearch = debounce(() => { if (ui.tab === 'library') renderPanel(); }, 250);
+
 function onPanelInput(e) {
     const t = e.target;
     if (t.id === 'stbs-q') { ui.q = t.value; runSearch(); }
+    else if (t.id === 'stbs-lib-q') { ui.libQ = t.value; runLibSearch(); }
     else if (t.id === 'stbs-scope' && e.type === 'change') { ui.scope = t.value; runSearch(); }
     else if (t.id === 'stbs-chscope' && e.type === 'change') { ui.chapterScope = t.value; runSearch(); }
     else if (t.id === 'stbs-hidscope' && e.type === 'change') { settings().searchHidden = t.value; saveSettings(); runSearch(); }
@@ -2813,6 +3207,31 @@ async function onPanelClick(e) {
                 break;
             }
             case 'note-filter': ui.noteFilter = act.dataset.f; renderPanel(); break;
+            case 'note-tag': {
+                const t = act.dataset.tag;
+                if (ui.tab === 'library') { ui.libTag = ui.libTag === t ? '' : t; renderPanel(); break; }
+                ui.noteTag = ui.tab === 'notes' && ui.noteTag === t ? '' : t;
+                ui.tab = 'notes'; ui.scrap = null; renderPanel();
+                break;
+            }
+            case 'daily-next': ui.dailyShift = (ui.dailyShift || 0) + 1; renderPanel(); break;
+            case 'daily-hide': { const s2 = settings(); s2.dailyHidden = { ...(s2.dailyHidden || {}), [ctx().getCurrentChatId()]: todayKey() }; saveSettings(); renderPanel(); toastr.info('오늘의 문장은 내일 다시 보여 드릴게요.', '', { timeOut: 2200 }); break; }
+            case 'chapter-card': openSummaryCard('chapter', id); break;
+            case 'stats-card': openSummaryCard('stats'); break;
+            case 'bm-sort': settings().bmSort = act.dataset.v; saveSettings(); renderPanel(); break;
+            case 'bm-folder': { const b = d.bookmarks.find(x => x.id === id); if (b) await setBmFolder(b); break; }
+            case 'bm-fold': { const f2 = act.dataset.f; if (ui.bmFold.has(f2)) ui.bmFold.delete(f2); else ui.bmFold.add(f2); renderPanel(); break; }
+            case 'lib-refresh': loadLibrary(true); renderPanel(); break;
+            case 'lib-kind': ui.libKind = act.dataset.k; renderPanel(); break;
+            case 'lib-tag': ui.libTag = ui.libTag === act.dataset.tag ? '' : act.dataset.tag; renderPanel(); break;
+            case 'lib-toggle': {
+                ui.libOpen ||= new Map();
+                const el = act.closest('.stbs-lib-chat');
+                ui.libOpen.set(act.dataset.chat, !el?.classList.contains('open'));
+                renderPanel();
+                break;
+            }
+            case 'lib-open': openChatAndJump(act.dataset.chat, Number(act.dataset.mes), act.dataset.nid || null); break;
             case 'note-sort': ui.noteSort = ui.noteSort === 'story' ? 'recent' : 'story'; renderPanel(); break;
             case 'note-edit': { const n = getNote(id); if (n) openMemoEditor({ note: n }); break; }
             case 'note-card': { const n = getNote(id); if (n) openCard({ note: n }); break; }
@@ -2824,7 +3243,7 @@ async function onPanelClick(e) {
             case 'scrap-new': openScrapEditor(); break;
             case 'scrap-rename': { const sb = getScrap(id); if (sb) openScrapEditor({ scrap: sb }); break; }
             case 'scrap-del': await deleteScrap(id); break;
-            case 'scrap-card': { const sb = getScrap(id); if (sb) cardFromNotes(scrapNotes(sb)); break; }
+            case 'scrap-card': { const sb = getScrap(id); if (sb) openCardChoice(scrapNotes(sb), sb.name); break; }
             case 'scrap-remove': {
                 const sb = getScrap(ui.scrap);
                 if (sb) { sb.noteIds = sb.noteIds.filter(x => x !== id); sb.updated = Date.now(); persist(); renderPanel(); }
@@ -2837,18 +3256,677 @@ async function onPanelClick(e) {
                 if (!ui.selected.size) break;
                 const order = new Map(d.notes.map((n, k) => [n.id, k]));
                 const picked = d.notes.filter(n => ui.selected.has(n.id)).sort((a, b) => a.mesId - b.mesId || (a.start ?? -1) - (b.start ?? -1) || order.get(a.id) - order.get(b.id));
-                cardFromNotes(picked);
+                openCardChoice(picked);
                 break;
             }
         }
         return;
     }
+    if (e.target.closest('[data-bmgrip]')) return; // end of a drag, not a tap on the bookmark
     const jump = e.target.closest('[data-jump]');
     if (jump) {
         const i = Number(jump.dataset.jump), noteId = jump.dataset.note || null, q = ui.tab === 'search' ? ui.q : '';
         if (settings().farReader && isFar(i)) openReader(i, { noteId, query: q });
         else jumpTo(i, noteId, q);
     }
+}
+
+// ---------------------------------------------------------------- many cards at once (v1.15)
+
+/** Everything a card needs to know about one message (and the note on it, if any). */
+function cardBase(mesId, note = null) {
+    const s = settings(), c = ctx();
+    return {
+        title: c.groupId ? (c.groups?.find?.(x => x.id === c.groupId)?.name || c.name2 || '') : (c.name2 || ''),
+        page: pageOf(mesId),
+        time: mesTime(mesId),
+        hl: s.colors[note?.color ?? 0] || s.colors[0] || '#ffe066',
+        who: speaker(mesId),
+        chapter: sortedChapters().length ? chapterLabel(chapterOf(mesId)) : '',
+    };
+}
+async function cardAssets(mesId) {
+    const u = avatarUrls(mesId);
+    const [thumb, full] = await Promise.all([loadCardImage(u.thumb), loadCardImage(u.full)]);
+    return { thumb, full };
+}
+
+/** "1 / 5" on cards saved as a set, where each design has room for it. */
+function drawSeriesMark(g, W, H, layout, t, k, n) {
+    const s = `${k} / ${n}`;
+    g.save();
+    g.font = `600 24px ${pageFonts().uiFont}, sans-serif`;
+    g.textBaseline = 'middle';
+    const w = g.measureText(s).width + 30, h = 42;
+    let x = W - 64 - w, y = 64;
+    if (layout === 'page') { x = 110; y = H - 92 - h / 2 - 8; }
+    if (layout === 'subtitle') { x = W - 120 - w; y = Math.round(H * 0.075) / 2 - h / 2; }
+    const dark = t.dark || layout === 'subtitle' || ['#26332a', '#1b2140', '#161616'].includes(t.bg);
+    g.fillStyle = dark ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.07)';
+    roundPath(g, x, y, w, h, h / 2); g.fill();
+    g.fillStyle = layout === 'subtitle' ? '#d0d0d0' : (t.sub || '#888');
+    g.fillText(s, x + 15, y + h / 2 + 1);
+    g.restore();
+}
+
+/** Picked notes / a scrapbook: one card with everything, or one card per note. */
+function openCardChoice(notes, name = '') {
+    if (!notes.length) return;
+    if (notes.length === 1) { openCard({ note: notes[0] }); return; }
+    const body = openModal('카드로 만들기', `
+        <div class="stbs-choice">
+            <button type="button" class="stbs-choice-btn" data-pick="one"><i class="fa-regular fa-square"></i><b>한 장에 모으기</b><span>노트 ${notes.length}개를 카드 한 장에 이어서 담아요</span></button>
+            <button type="button" class="stbs-choice-btn" data-pick="many"><i class="fa-regular fa-clone"></i><b>여러 장으로</b><span>노트마다 한 장씩, 같은 디자인으로 ${notes.length}장을 만들어요</span></button>
+        </div>`);
+    body.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-pick]');
+        if (!b) return;
+        closeModal();
+        if (b.dataset.pick === 'one') cardFromNotes(notes); else openCardSeries(notes, name);
+    });
+}
+
+function openCardSeries(notes, name = '') {
+    const s = settings();
+    let layout = cardLayoutOf(s);
+    if (layout === 'commu') layout = 'underline';
+    const items = notes.map(n => ({ n, info: { ...cardBase(n.mesId, n), text: noteText(n), trans: n.trans || '', seed: parseInt(hash(noteText(n)).slice(0, 6), 36) || 7 }, assets: {} }));
+    let cur = 0;
+    const layouts = Object.entries(CARD_LAYOUTS).filter(([k]) => k !== 'commu');
+    const body = openModal(`카드 ${notes.length}장`, `
+        <div class="stbs-cx">
+            <div class="stbs-cx-view stbs-cx-series">
+                <canvas id="stbs-card-canvas"></canvas>
+                <div class="stbs-series-nav">
+                    <button type="button" data-step="-1" title="앞 장" aria-label="앞 장"><i class="fa-solid fa-chevron-left"></i></button>
+                    <span id="stbs-series-at">1 / ${notes.length}</span>
+                    <button type="button" data-step="1" title="다음 장" aria-label="다음 장"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            </div>
+            <div class="stbs-cx-side">
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-h">디자인 <span class="stbs-dim">모든 장에 똑같이</span></div>
+                    <div class="stbs-cx-lays">${layouts.map(([k, L]) => `<button type="button" class="stbs-cx-lay ${k === layout ? 'active' : ''}" data-layout="${k}"><canvas class="stbs-cx-thumb" data-thumb="${k}" width="216" height="270"></canvas><span>${L.name}</span></button>`).join('')}</div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints" id="stbs-cx-tints"></div></div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
+                </section>
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-h">카드에 넣을 것</div>
+                    <div class="stbs-cx-checks">${[...CARD_SHOW, ['count', `장 번호 (1 / ${notes.length})`]].map(([k, n]) => `<button type="button" class="stbs-cx-check ${(k === 'count' ? s.cardShow.count !== false : s.cardShow[k]) ? 'on' : ''}" data-show="${k}"><i class="fa-solid fa-check"></i>${n}</button>`).join('')}</div>
+                </section>
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-h">들어갈 노트</div>
+                    <ol class="stbs-series-list">${items.map((it, k) => `<li data-goto="${k}" class="${k === 0 ? 'on' : ''}"><span>${esc(clip(it.info.text.replace(/\s+/g, ' '), 46))}</span></li>`).join('')}</ol>
+                    <div class="stbs-hint">문장을 고치려면 카드를 한 장씩 만들어 주세요. 여기서는 디자인만 맞춰요.</div>
+                </section>
+            </div>
+            <div class="stbs-cx-foot">
+                ${navigator.canShare ? '<div class="stbs-btn" id="stbs-series-share"><i class="fa-solid fa-share-nodes"></i> 공유</div>' : ''}
+                <div class="stbs-btn stbs-primary" id="stbs-series-save"><i class="fa-solid fa-download"></i> ${notes.length}장 모두 저장</div>
+            </div>
+        </div>`, { wide: 'x' });
+    const canvas = body.querySelector('#stbs-card-canvas');
+    const tint = (k) => s.cardTints[k] ?? 0;
+    const infoAt = (k) => ({ ...items[k].info, show: s.cardShow, series: s.cardShow.count !== false ? { k: k + 1, n: items.length } : null });
+    const draw = (cv, k, lay = layout, ratio = s.cardRatio) => drawCard(cv, infoAt(k), lay, tint(lay), ratio, items[k].assets);
+    const redraw = () => {
+        draw(canvas, cur);
+        canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[s.cardRatio]}`);
+        body.querySelector('#stbs-series-at').textContent = `${cur + 1} / ${items.length}`;
+        body.querySelectorAll('[data-goto]').forEach(li => li.classList.toggle('on', Number(li.dataset.goto) === cur));
+    };
+    const off = document.createElement('canvas');
+    const drawThumbs = () => body.querySelectorAll('[data-thumb]').forEach(tc => {
+        draw(off, cur, tc.dataset.thumb, '4:5');
+        const tg = tc.getContext('2d'); tg.clearRect(0, 0, tc.width, tc.height); tg.drawImage(off, 0, 0, tc.width, tc.height);
+    });
+    const renderTints = () => {
+        body.querySelector('#stbs-cx-tints').innerHTML = CARD_LAYOUTS[layout].tints.map((t, k) =>
+            `<button type="button" class="stbs-cx-tint ${k === tint(layout) ? 'active' : ''}" data-tint="${k}" title="${t.name}"><span style="background:${t.bg || `rgb(${t.veil})`}"><i style="background:${t.mark || t.fg}"></i></span>${t.name}</button>`).join('');
+    };
+    body.addEventListener('click', (e) => {
+        const st = e.target.closest('[data-step]');
+        if (st) { cur = (cur + Number(st.dataset.step) + items.length) % items.length; redraw(); return; }
+        const go = e.target.closest('[data-goto]');
+        if (go) { cur = Number(go.dataset.goto); redraw(); return; }
+        const lay = e.target.closest('[data-layout]');
+        if (lay) { layout = lay.dataset.layout; s.cardLayout = layout; saveSettings(); body.querySelectorAll('[data-layout]').forEach(x => x.classList.toggle('active', x === lay)); renderTints(); redraw(); return; }
+        const tn = e.target.closest('[data-tint]');
+        if (tn) { s.cardTints[layout] = Number(tn.dataset.tint); saveSettings(); renderTints(); redraw(); drawThumbs(); return; }
+        const ra = e.target.closest('[data-ratio]');
+        if (ra) { s.cardRatio = ra.dataset.ratio; saveSettings(); body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra)); redraw(); return; }
+        const sh = e.target.closest('[data-show]');
+        if (sh) {
+            const k = sh.dataset.show;
+            s.cardShow[k] = k === 'count' ? s.cardShow.count === false : !s.cardShow[k];
+            if (k === 'fox') s.cardFox = s.cardShow.fox;
+            saveSettings(); sh.classList.toggle('on', k === 'count' ? s.cardShow.count !== false : !!s.cardShow[k]);
+            redraw(); drawThumbs();
+        }
+    });
+    const blobs = async () => {
+        const out = [];
+        const cv = document.createElement('canvas');
+        for (let k = 0; k < items.length; k++) {
+            draw(cv, k);
+            out.push(await new Promise(r => cv.toBlob(r, 'image/png')));
+        }
+        return out;
+    };
+    const base = safeFileName(name || `명대사_${fmtDate(Date.now())}`);
+    const fileName = (k) => `${base}_${String(k + 1).padStart(2, '0')}.png`;
+    body.querySelector('#stbs-series-save').addEventListener('click', async () => {
+        const list = await blobs();
+        // one download after another — browsers drop downloads that start in the same moment
+        for (let k = 0; k < list.length; k++) { if (list[k]) download(fileName(k), list[k]); await sleep(350); }
+        toastr.success(`🦊 카드 ${list.length}장을 저장했어요.`);
+    });
+    body.querySelector('#stbs-series-share')?.addEventListener('click', async () => {
+        const list = await blobs();
+        const files = list.map((b, k) => new File([b], fileName(k), { type: 'image/png' }));
+        try {
+            if (!navigator.canShare({ files })) throw new Error('no');
+            await navigator.share({ files });
+        } catch (err) {
+            if (err?.name !== 'AbortError') toastr.warning('이 브라우저에서는 여러 장 공유가 안 돼요. 모두 저장을 써 주세요.');
+        }
+    });
+    renderTints();
+    redraw();
+    Promise.all([loadFoxImage(), document.fonts?.ready?.catch?.(() => { }), ...items.map(it => cardAssets(it.n.mesId).then(a => { it.assets = a; }))])
+        .then(() => { if (canvas.isConnected) { redraw(); drawThumbs(); } });
+    setTimeout(drawThumbs, 30);
+}
+
+// ---------------------------------------------------------------- chapter summary card & reading record card (v1.15)
+
+const SUMMARY_TINTS = [
+    { name: '미색', bg: '#f4eee1', fg: '#2f2a22', sub: '#857a68', box: '#fbf7ee', line: '#e2d8c5', star: '#e8a33d', accent: '#c8642e' },
+    { name: '여우', bg: '#e8743b', fg: '#2a1408', sub: '#5e2a10', box: '#f08a55', line: '#f3a072', star: '#fff1e4', accent: '#fff1e4' },
+    { name: '밤', bg: '#1d1f26', fg: '#eceef3', sub: '#9097a6', box: '#262934', line: '#333746', star: '#f2cf6c', accent: '#f29a66', dark: true },
+];
+
+function starShape(g, cx, cy, r) {
+    g.beginPath();
+    for (let k = 0; k < 10; k++) {
+        const a = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? r * 0.45 : r;
+        g[k ? 'lineTo' : 'moveTo'](cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+    }
+    g.closePath();
+}
+function drawStars(g, x, cy, r, n, on, off) {
+    for (let k = 0; k < 5; k++) { g.fillStyle = k < n ? on : off; starShape(g, x + r + k * r * 2.3, cy, r); g.fill(); }
+    return x + 5 * r * 2.3;
+}
+
+function drawSummary(canvas, S, tintIdx = 0, ratio = '4:5', A = {}) {
+    const t = SUMMARY_TINTS[tintIdx] || SUMMARY_TINTS[0];
+    const W = canvas.width = 1080, H = canvas.height = CARD_RATIOS[ratio] || 1350;
+    const g = canvas.getContext('2d');
+    const f = pageFonts(), ui = `${f.uiFont}, sans-serif`, read = `${f.readFont}, sans-serif`;
+    const M = 92, maxW = W - M * 2;
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    g.textBaseline = 'alphabetic';
+    const off = t.dark ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.12)';
+    // who this book is with
+    let y = M;
+    const showAv = S.show.avatar && A.thumb;
+    if (showAv) {
+        g.save(); g.beginPath(); g.arc(M + 36, y + 36, 36, 0, Math.PI * 2); g.clip(); coverImage(g, A.thumb, M, y, 72, 72); g.restore();
+    }
+    const hx = showAv ? M + 92 : M;
+    g.fillStyle = t.fg; g.font = `700 32px ${ui}`; g.fillText(fitText(g, S.title || '', W - hx - M), hx, y + 32);
+    g.fillStyle = t.sub; g.font = `26px ${ui}`; g.fillText(fitText(g, S.kicker, W - hx - M), hx, y + 68);
+    y += 72 + 70;
+
+    if (S.kind === 'chapter') {
+        g.fillStyle = t.fg; g.font = `800 64px ${ui}`;
+        const tl = wrapLines(g, S.heading, maxW).filter(Boolean).slice(0, 2);
+        tl.forEach((l, k) => g.fillText(k === 1 && wrapLines(g, S.heading, maxW).filter(Boolean).length > 2 ? fitText(g, l + '…', maxW) : l, M, y + 56 + k * 78));
+        y += 56 + (tl.length - 1) * 78 + 40;
+        if (S.rating) { drawStars(g, M, y + 20, 20, S.rating, t.star, off); y += 64; }
+        if (S.review) {
+            g.fillStyle = t.fg; g.font = `500 34px ${read}`;
+            const rl = wrapLines(g, `“${S.review}”`, maxW).filter(Boolean).slice(0, 2);
+            rl.forEach((l, k) => g.fillText(l, M, y + 34 + k * 52));
+            y += 34 + (rl.length - 1) * 52 + 40;
+        }
+        // the chapter's best lines — one text size for all of them, each box as tall as its text
+        const foot = 120;
+        const lines = S.lines.slice(0, 3);
+        const quotes = lines.length ? lines : (S.opening ? [{ text: S.opening, who: S.openingWho, color: null }] : []);
+        if (quotes.length) {
+            g.fillStyle = t.sub; g.font = `600 26px ${ui}`; g.fillText(lines.length ? '이 장의 문장' : '이 장은 이렇게 시작해요', M, y + 30); y += 56;
+            const avail = H - M - foot - y - (quotes.length - 1) * 18;
+            const font = (fs) => `${fs}px ${read}`;
+            const PADV = 26, WHO = 40, inner = maxW - 70;
+            let size = 34, laid;
+            for (; size >= 20; size -= 2) {
+                laid = quotes.map(q => fitQuote(g, { main: q.text, font, maxW: inner, avail: 1e6, max: size, min: size, lh: 1.55 }));
+                if (laid.reduce((a, m) => a + m.total + PADV * 2 + WHO, 0) <= avail) break;
+            }
+            // still too tall at the smallest size: cut each quote to its share
+            const share = avail / quotes.length;
+            quotes.forEach((q, k) => {
+                let m = laid[k];
+                if (m.total + PADV * 2 + WHO > share && laid.reduce((a, x) => a + x.total + PADV * 2 + WHO, 0) > avail) m = fitQuote(g, { main: q.text, font, maxW: inner, avail: share - PADV * 2 - WHO, max: size, min: size, lh: 1.55 });
+                const box = m.total + PADV * 2 + WHO;
+                g.fillStyle = t.box; roundPath(g, M, y, maxW, box, 20); g.fill();
+                g.fillStyle = q.color || t.accent; roundPath(g, M, y + 18, 7, box - 36, 4); g.fill();
+                drawLaid(g, m, { x: M + 36, y: y + PADV, w: inner, color: t.fg, subColor: t.sub, font });
+                g.fillStyle = t.sub; g.font = `22px ${ui}`; g.fillText(fitText(g, q.who || '', inner), M + 36, y + box - PADV + 2);
+                y += box + 18;
+            });
+        }
+    } else {
+        // reading record: the pages the fox ate, big
+        g.fillStyle = t.sub; g.font = `600 28px ${ui}`; g.fillText('여우가 냠냠 먹어치운 분량', M, y + 28);
+        g.fillStyle = t.fg; g.font = `800 168px ${ui}`;
+        const num = Math.max(1, Math.round(S.pages)).toLocaleString();
+        g.fillText(num, M - 6, y + 200);
+        const nw = g.measureText(num).width;
+        g.font = `700 52px ${ui}`; g.fillText('쪽', M + nw + 12, y + 200);
+        y += 250;
+        const tiles = S.tiles;
+        const tw = (maxW - 18) / 2, th = 128;
+        tiles.forEach(([v, l], k) => {
+            const tx = M + (k % 2) * (tw + 18), ty = y + Math.floor(k / 2) * (th + 18);
+            g.fillStyle = t.box; roundPath(g, tx, ty, tw, th, 22); g.fill();
+            g.fillStyle = t.fg; g.font = `800 48px ${ui}`; g.fillText(fitText(g, v, tw - 52), tx + 28, ty + 64);
+            g.fillStyle = t.sub; g.font = `26px ${ui}`; g.fillText(l, tx + 28, ty + 104);
+        });
+        y += Math.ceil(tiles.length / 2) * (th + 18) + 36;
+        if (S.words.length && y < H - 380) {
+            g.fillStyle = t.sub; g.font = `600 26px ${ui}`; g.fillText('자주 나온 단어', M, y + 26); y += 50;
+            let wx = M;
+            g.font = `600 30px ${ui}`;
+            for (const w of S.words) {
+                const ww = g.measureText(w).width + 44;
+                if (wx + ww > W - M) break;
+                g.fillStyle = t.box; roundPath(g, wx, y, ww, 58, 29); g.fill();
+                g.fillStyle = t.fg; g.fillText(w, wx + 22, y + 40);
+                wx += ww + 12;
+            }
+            y += 58 + 40;
+        }
+        if ((S.rating || S.review) && y < H - 220) {
+            if (S.rating) { drawStars(g, M, y + 20, 18, S.rating, t.star, off); y += 56; }
+            if (S.review) { g.fillStyle = t.fg; g.font = `500 32px ${read}`; g.fillText(fitText(g, `“${S.review}”`, maxW), M, y + 30); }
+        }
+    }
+    // footer
+    g.fillStyle = t.sub; g.font = `24px ${ui}`;
+    g.fillText(fitText(g, S.footer || '', maxW - 100), M, H - M + 6);
+    if (S.show.fox) foxStamp(g, W - M - 30, H - M - 4, 34, t.dark ? null : t.accent);
+}
+
+/** Which lines stand for a chapter: ones with a memo first, then the rest in story order. */
+function chapterLines(from, to) {
+    const s = settings();
+    const notes = data().notes.filter(n => n.mesId >= from && n.mesId <= to && n.start != null);
+    const scored = notes.map((n, k) => ({ n, k, score: (n.memo ? 2 : 0) + (n.color != null ? 1 : 0) }));
+    scored.sort((a, b) => b.score - a.score || a.n.mesId - b.n.mesId || a.k - b.k);
+    return scored.map(({ n }) => ({ id: n.id, text: noteText(n), who: speaker(n.mesId), color: n.color != null ? s.colors[n.color] : null, mesId: n.mesId }));
+}
+
+function chapterRange(id) {
+    const chat = ctx().chat || [];
+    const chapters = sortedChapters();
+    if (id === '__prologue') return { title: chapters.length ? '프롤로그' : '처음부터', num: 0, from: 0, to: (chapters[0]?.mesId ?? chat.length) - 1, ch: null };
+    const k = chapters.findIndex(c => c.id === id);
+    if (k < 0) return null;
+    return { title: chapters[k].title, num: k + 1, from: chapters[k].mesId, to: (chapters[k + 1]?.mesId ?? chat.length) - 1, ch: chapters[k] };
+}
+
+function openSummaryCard(kind, chapterId = null) {
+    const s = settings();
+    s.summaryTint ??= 0;
+    const show = { avatar: s.cardShow?.avatar !== false, fox: s.cardFox !== false };
+    const c = ctx();
+    const title = c.groupId ? (c.groups?.find?.(x => x.id === c.groupId)?.name || '') : (c.name2 || '');
+    const cpp = Math.max(100, Number(s.charsPerPage) || 600);
+    let S, picks = [], all = [];
+    if (kind === 'chapter') {
+        const r = chapterRange(chapterId);
+        if (!r) return;
+        all = chapterLines(r.from, r.to);
+        picks = all.slice(0, 3).map(x => x.id);
+        let chars = 0; for (let j = r.from; j <= r.to; j++) chars += plain(c.chat[j]?.mes).length;
+        const p0 = pageOf(r.from), p1 = pageOf(Math.max(r.from, r.to));
+        S = { kind, title, kicker: r.num ? `${r.num}장` : r.title, heading: r.num ? r.title : r.title, rating: Number(r.ch?.rating) || 0, review: r.ch?.review || '',
+            footer: `p. ${Math.max(1, p0)}–${Math.max(1, p1)} · 약 ${Math.max(1, Math.round(chars / cpp))}쪽 · #${r.from}–#${Math.max(r.from, r.to)}`, show, lines: [] };
+        // no highlighted lines in this chapter: show how it begins instead
+        const first = (() => { for (let j = r.from; j <= r.to; j++) { const m = c.chat[j]; if (m && !m.is_system && plain(m.mes).trim()) return j; } return -1; })();
+        if (first >= 0) { S.opening = clip(plainKeep(c.chat[first].mes), 220); S.openingWho = speaker(first); }
+    } else {
+        const st = computeStats(), d = data();
+        const days = st.first && st.last ? Math.max(1, Math.round((st.last - st.first) / 86400000) + 1) : null;
+        S = { kind, title, kicker: '함께 읽은 기록', pages: st.pages, rating: Number(d.review?.rating) || 0, review: d.review?.text || '',
+            tiles: [[st.count.toLocaleString(), '메시지'], [days ? `${days}일` : '–', '함께한 날'], [String(d.notes.filter(n => n.color != null).length), '형광펜'], [String(d.bookmarks.length), '책갈피']],
+            words: st.topWords.slice(0, 6).map(([w]) => w), footer: `${fmtDate(Date.now())} · 1쪽 = ${cpp}자`, show };
+    }
+    const body = openModal(kind === 'chapter' ? '챕터 요약 카드' : '독서 기록 카드', `
+        <div class="stbs-cx">
+            <div class="stbs-cx-view"><canvas id="stbs-card-canvas"></canvas></div>
+            <div class="stbs-cx-side">
+                <section class="stbs-cx-sec">
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints">${SUMMARY_TINTS.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === s.summaryTint ? 'active' : ''}" data-tint="${k}"><span style="background:${t.bg}"><i style="background:${t.accent}"></i></span>${t.name}</button>`).join('')}</div></div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
+                    <div class="stbs-cx-checks">${[['avatar', '프로필 사진'], ['fox', '여우 도장']].map(([k, n]) => `<button type="button" class="stbs-cx-check ${show[k] ? 'on' : ''}" data-show="${k}"><i class="fa-solid fa-check"></i>${n}</button>`).join('')}</div>
+                </section>
+                ${kind === 'chapter' ? `<section class="stbs-cx-sec">
+                    <div class="stbs-cx-h">카드에 넣을 문장 <span class="stbs-dim">3개까지</span></div>
+                    ${all.length ? `<div class="stbs-pick-list">${all.slice(0, 30).map(x => `<button type="button" class="stbs-pick ${picks.includes(x.id) ? 'on' : ''}" data-pickline="${x.id}"><i class="fa-solid fa-check"></i><span>${esc(clip(x.text.replace(/\s+/g, ' '), 70))}</span></button>`).join('')}</div>`
+                        : '<div class="stbs-hint">이 장에 칠한 문장이 없어요. 형광펜을 칠하면 여기에 골라 넣을 수 있어요.</div>'}
+                    <div class="stbs-hint">별점과 한줄평은 목차의 <i class="fa-regular fa-star"></i> 버튼으로 바꿔요.</div>
+                </section>` : `<section class="stbs-cx-sec"><div class="stbs-hint">숫자는 통계 탭과 같아요. 별점과 한줄평은 "이 책의 별점"에서 바꿔요.</div></section>`}
+            </div>
+            <div class="stbs-cx-foot">
+                <div class="stbs-btn" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
+                <div class="stbs-btn stbs-primary" id="stbs-card-save"><i class="fa-solid fa-download"></i> PNG로 저장</div>
+            </div>
+        </div>`, { wide: 'x' });
+    const canvas = body.querySelector('#stbs-card-canvas');
+    const A = {};
+    const redraw = () => {
+        if (kind === 'chapter') S.lines = picks.map(id => all.find(x => x.id === id)).filter(Boolean);
+        drawSummary(canvas, S, s.summaryTint, s.cardRatio, A);
+        canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[s.cardRatio]}`);
+    };
+    body.addEventListener('click', (e) => {
+        const tn = e.target.closest('[data-tint]');
+        if (tn) { s.summaryTint = Number(tn.dataset.tint); saveSettings(); body.querySelectorAll('[data-tint]').forEach(x => x.classList.toggle('active', x === tn)); redraw(); return; }
+        const ra = e.target.closest('[data-ratio]');
+        if (ra) { s.cardRatio = ra.dataset.ratio; saveSettings(); body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra)); redraw(); return; }
+        const sh = e.target.closest('[data-show]');
+        if (sh) { const k = sh.dataset.show; show[k] = !show[k]; sh.classList.toggle('on', show[k]); redraw(); return; }
+        const pl = e.target.closest('[data-pickline]');
+        if (pl) {
+            const id = pl.dataset.pickline;
+            if (picks.includes(id)) picks = picks.filter(x => x !== id);
+            else if (picks.length < 3) picks.push(id);
+            else { toastr.info('문장은 3개까지 넣을 수 있어요. 하나를 먼저 빼 주세요.', '', { timeOut: 2200, preventDuplicates: true }); return; }
+            body.querySelectorAll('[data-pickline]').forEach(x => x.classList.toggle('on', picks.includes(x.dataset.pickline)));
+            redraw();
+        }
+    });
+    const name = kind === 'chapter' ? `챕터요약_${S.kicker}_${S.heading}` : `독서기록_${title}`;
+    body.querySelector('#stbs-card-save').addEventListener('click', () => canvas.toBlob(b => b && download(`${safeFileName(name)}.png`, b), 'image/png'));
+    body.querySelector('#stbs-card-copy').addEventListener('click', () => canvas.toBlob(async (b) => {
+        try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]); toastr.success('이미지를 복사했어요.'); }
+        catch { toastr.warning('이 브라우저에서는 이미지 복사가 안 돼요. PNG로 저장을 써 주세요.'); }
+    }, 'image/png'));
+    redraw();
+    const lastChar = [...(c.chat || [])].map((m, i) => [m, i]).reverse().find(([m]) => m && !m.is_user && !m.is_system)?.[1] ?? 0;
+    Promise.all([loadFoxImage(), document.fonts?.ready?.catch?.(() => { }), cardAssets(lastChar).then(a => Object.assign(A, a))])
+        .then(() => { if (canvas.isConnected) redraw(); });
+}
+
+// ---------------------------------------------------------------- today's line (v1.15)
+
+const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+
+/** One highlighted line from this book, the same one all day (↻ picks another). */
+function dailyPick() {
+    const notes = data().notes.filter(n => n.start != null && noteText(n).trim());
+    if (notes.length < 2) return null;
+    const seed = parseInt(hash(`${todayKey()}|${ctx().getCurrentChatId?.() || ''}`).slice(0, 7), 36) || 1;
+    return notes[(seed + (ui.dailyShift || 0)) % notes.length];
+}
+function dailyHtml() {
+    const s = settings();
+    if (!s.dailyLine || !hasChat()) return '';
+    if (s.dailyHidden?.[ctx().getCurrentChatId?.()] === todayKey()) return '';
+    const n = dailyPick();
+    if (!n) return '';
+    const days = Math.max(0, Math.floor((Date.now() - (n.created || Date.now())) / 86400000));
+    const when = days >= 1 ? `${days}일 전에 칠한 문장` : '오늘 칠한 문장';
+    const color = n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : '';
+    return `<div class="stbs-daily" ${color} data-jump="${n.mesId}" data-note="${n.id}">
+        <div class="stbs-daily-head"><span><i class="fa-solid fa-sun"></i> 오늘의 문장</span><span class="stbs-dim">${when}</span>
+            <span class="stbs-daily-acts">
+                <span class="stbs-icon-btn fa-solid fa-rotate" data-act="daily-next" title="다른 문장"></span>
+                <span class="stbs-icon-btn fa-solid fa-quote-left" data-act="note-card" data-id="${n.id}" title="명대사 카드"></span>
+                <span class="stbs-icon-btn fa-solid fa-xmark" data-act="daily-hide" title="오늘은 그만 보기"></span>
+            </span></div>
+        <div class="stbs-daily-text">${esc(noteText(n))}</div>
+        <div class="stbs-meta">${esc(speaker(n.mesId))} · #${n.mesId}</div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- note tags (v1.15)
+// A tag is simply #word inside the memo: "#설렘 #복선 우산 장면에서 처음으로…"
+
+const TAG_RE = /#([\p{L}\p{N}_]+)/gu;
+function noteTags(n) {
+    return [...new Set([...String(n?.memo || '').matchAll(TAG_RE)].map(m => m[1]))];
+}
+function allTags(notes = data().notes) {
+    const m = new Map();
+    for (const n of notes) for (const t of noteTags(n)) m.set(t, (m.get(t) || 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+/** Memo text with its #tags as tappable chips. */
+function memoHtml(memo) {
+    return esc(memo).replace(/#([\p{L}\p{N}_]+)/gu, (all, t) => `<span class="stbs-tag" data-act="note-tag" data-tag="${t}">#${t}</span>`);
+}
+
+// ---------------------------------------------------------------- bookmark folders & own order (v1.15)
+
+function bmFolders(list = data().bookmarks) {
+    const seen = new Map();
+    for (const b of list) if (b.folder && !seen.has(b.folder)) seen.set(b.folder, Math.min(...list.filter(x => x.folder === b.folder).map(x => x.order ?? x.mesId)));
+    return [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([f]) => f);
+}
+/** Give every bookmark an order the first time "my order" is used (story order to start with). */
+function ensureBmOrder() {
+    const list = data().bookmarks;
+    if (list.every(b => Number.isFinite(b.order))) return;
+    [...list].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity) || a.mesId - b.mesId).forEach((b, k) => { b.order = k; });
+    persist();
+}
+
+async function setBmFolder(b) {
+    const have = bmFolders();
+    const res = await ctx().Popup.show.input('📁 책갈피 폴더', have.length ? `있는 폴더: ${have.join(', ')}<br>비워 두면 폴더에서 빼요.` : '새 폴더 이름을 적어요. 비워 두면 폴더에서 빼요.', b.folder || '');
+    if (res === null || res === false || res === undefined) return;
+    const v = String(res).trim().slice(0, 30);
+    if (v) b.folder = v; else delete b.folder;
+    persist(); refreshPanel();
+}
+
+/** Drag a bookmark by its handle (mouse or finger) to reorder it, or drop it into another folder. */
+function startBmDrag(e, handle) {
+    const item = handle.closest('.stbs-bm-item');
+    const body = $id('stbs-body');
+    if (!item || !body) return;
+    e.preventDefault();
+    const pid = e.pointerId;
+    item.classList.add('dragging');
+    const startY = e.clientY;
+    const r0 = item.getBoundingClientRect();
+    let lastY = e.clientY;
+    // where the item is in the list follows the finger right away (no frame delay: a quick flick must not lose moves)
+    const place = () => {
+        const others = [...body.querySelectorAll('.stbs-bm-item:not(.dragging), .stbs-bm-group-head')];
+        const over = others.find(o => { const r = o.getBoundingClientRect(); return lastY >= r.top && lastY <= r.bottom; });
+        if (over) {
+            if (over.classList.contains('stbs-bm-group-head')) {
+                const list = over.parentElement.querySelector('.stbs-bm-list');
+                if (list && list.firstElementChild !== item) list.prepend(item);
+            } else {
+                const r = over.getBoundingClientRect();
+                const ref = lastY < r.top + r.height / 2 ? over : over.nextElementSibling;
+                if (ref !== item && item.nextElementSibling !== ref) over.parentElement.insertBefore(item, ref);
+            }
+        }
+        item.style.transform = '';
+        const nr = item.getBoundingClientRect();
+        item.style.transform = `translateY(${lastY - (nr.top + (startY - r0.top))}px)`;
+    };
+    // listen on the window: moving the item inside the list makes the browser drop pointer capture
+    const move = (ev) => {
+        if (ev.pointerId !== pid) return;
+        ev.preventDefault();
+        lastY = ev.clientY;
+        // auto-scroll near the panel's edges
+        const br = body.getBoundingClientRect();
+        if (lastY < br.top + 40) body.scrollTop -= 12; else if (lastY > br.bottom - 40) body.scrollTop += 12;
+        place();
+    };
+    const up = (ev) => {
+        if (ev && ev.pointerId !== pid) return;
+        window.removeEventListener('pointermove', move, true);
+        window.removeEventListener('pointerup', up, true);
+        window.removeEventListener('pointercancel', up, true);
+        item.classList.remove('dragging');
+        item.style.transform = '';
+        const d = data();
+        let k = 0;
+        body.querySelectorAll('.stbs-bm-list').forEach(listEl => {
+            const folder = listEl.dataset.folder || '';
+            listEl.querySelectorAll('.stbs-bm-item').forEach(el => {
+                const b = d.bookmarks.find(x => x.id === el.dataset.bm);
+                if (!b) return;
+                b.order = k++;
+                if (folder) b.folder = folder; else delete b.folder;
+            });
+        });
+        persist();
+        refreshPanel();
+    };
+    window.addEventListener('pointermove', move, { capture: true, passive: false });
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+}
+
+// ---------------------------------------------------------------- library: this character's other chats (v1.15)
+
+const library = { key: '', at: 0, loading: false, chats: [], error: '' };
+
+function libraryKey() {
+    const c = ctx();
+    return c.groupId ? `g:${c.groupId}` : `c:${c.characters?.[c.characterId]?.avatar || ''}`;
+}
+function chatLabel(fileId) {
+    // "Seraphina - 2026-10-04@04h55m21s" → "2026-10-04 04:55"
+    const m = String(fileId).match(/(\d{4})-(\d{1,2})-(\d{1,2})\s*@\s*(\d{1,2})h\s*(\d{1,2})m/);
+    return m ? `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(2, '0')} ${m[4].padStart(2, '0')}:${m[5].padStart(2, '0')}` : String(fileId);
+}
+
+async function loadLibrary(force = false) {
+    const key = libraryKey();
+    if (library.loading || (!force && library.key === key && Date.now() - library.at < 60000)) return;
+    const c = ctx();
+    library.loading = true; library.error = '';
+    try {
+        if (c.groupId) throw new Error('group');
+        const avatar = c.characters?.[c.characterId]?.avatar;
+        if (!avatar) throw new Error('none');
+        const res = await fetch('/api/characters/chats', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, metadata: true }) });
+        const list = Object.values(await res.json() || {}).filter(x => x?.file_name);
+        // older SillyTavern doesn't send the metadata with the list: read each chat's first line instead
+        const need = list.filter(x => !x.chat_metadata);
+        for (let k = 0; k < need.length; k += 4) {
+            await Promise.all(need.slice(k, k + 4).map(async (x) => {
+                try {
+                    const r = await fetch('/api/chats/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ ch_name: c.characters[c.characterId].name, file_name: String(x.file_name).replace(/\.jsonl$/, ''), avatar_url: avatar }) });
+                    const arr = await r.json();
+                    x.chat_metadata = (Array.isArray(arr) ? arr[0]?.chat_metadata : null) || {};
+                    x.__messages = Array.isArray(arr) ? arr.slice(1) : null;
+                } catch { x.chat_metadata = {}; }
+            }));
+        }
+        const current = c.getCurrentChatId?.();
+        library.chats = list.map(x => {
+            const id = String(x.file_name).replace(/\.jsonl$/, '');
+            const isCur = id === current;
+            const d = isCur ? data() : (x.chat_metadata?.[META_KEY] || {});
+            return { id, label: chatLabel(id), isCur, last: Number(x.last_mes) || Date.parse(x.last_mes) || 0, items: Number(x.chat_items) || 0, notes: d.notes || [], bookmarks: d.bookmarks || [], review: d.review || null, messages: isCur ? null : x.__messages || null };
+        }).filter(x => x.notes.length || x.bookmarks.length || x.isCur).sort((a, b) => (b.isCur - a.isCur) || b.last - a.last);
+        library.key = key; library.at = Date.now();
+    } catch (err) {
+        library.chats = []; library.key = key; library.at = Date.now();
+        library.error = err?.message === 'group' ? 'group' : 'fail';
+    } finally {
+        library.loading = false;
+        if (ui.tab === 'library') refreshPanel();
+    }
+}
+
+function renderLibrary() {
+    const key = libraryKey();
+    if (library.key !== key || Date.now() - library.at > 60000) loadLibrary();
+    if (library.error === 'group') return emptyState('그룹 채팅에서는 아직 못 넘나들어요', '캐릭터 한 명과의 채팅에서 써 주세요.');
+    if (library.loading && library.key !== key) return emptyState('서재를 살펴보는 중이에요…', '이 캐릭터와 나눈 다른 채팅들을 열어 보고 있어요.');
+    if (library.error) return emptyState('다른 채팅을 읽지 못했어요', '<span class="stbs-btn" data-act="lib-refresh"><i class="fa-solid fa-rotate"></i> 다시 시도</span>', false);
+    const q = (ui.libQ || '').trim().toLowerCase();
+    const kind = ui.libKind || 'all';
+    const tag = ui.libTag || '';
+    const s = settings();
+    const chats = library.chats.map(ch => ({ ...ch, notes: ch.isCur ? data().notes : ch.notes, bookmarks: ch.isCur ? data().bookmarks : ch.bookmarks }));
+    const tags = allTags(chats.flatMap(ch => ch.notes));
+    let total = 0;
+    const blocks = chats.map(ch => {
+        const rows = [];
+        if (kind !== 'bookmark') for (const n of ch.notes) {
+            const text = n.start == null ? (ch.messages ? plainKeep(ch.messages[n.mesId]?.mes) : '') : (n.text || n.quote || '');
+            if (tag && !noteTags(n).includes(tag)) continue;
+            if (q && !`${text}\n${n.memo || ''}`.toLowerCase().includes(q)) continue;
+            rows.push({ t: n.mesId, html: `<div class="stbs-note stbs-lib-row ${n.color == null ? 'no-color' : ''}" ${n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : ''} data-act="lib-open" data-chat="${esc(ch.id)}" data-mes="${n.mesId}" data-nid="${n.id}">
+                <div class="stbs-note-quote">${text ? esc(text) : `<span class="stbs-badge">메시지 전체</span> #${n.mesId}`}</div>
+                ${n.memo ? `<div class="stbs-note-memo">${memoHtml(n.memo)}</div>` : ''}
+                <div class="stbs-meta">#${n.mesId} · ${fmtDate(n.updated || n.created)}</div></div>` });
+        }
+        if (kind !== 'note' && !tag) for (const b of ch.bookmarks) {
+            const text = ch.isCur ? plain(msg(b.mesId)?.mes) : (ch.messages ? plain(ch.messages[b.mesId]?.mes) : '');
+            if (q && !`${b.label || ''}\n${text}`.toLowerCase().includes(q)) continue;
+            rows.push({ t: b.mesId, html: `<div class="stbs-item stbs-bm-item stbs-lib-row" data-act="lib-open" data-chat="${esc(ch.id)}" data-mes="${b.mesId}">
+                <i class="fa-solid fa-bookmark stbs-bm-ico"></i>
+                <div class="stbs-grow"><div class="stbs-item-title">${esc(b.label || (text ? clip(text, 40) : `#${b.mesId}`))}</div>
+                ${b.folder ? `<div class="stbs-meta"><i class="fa-regular fa-folder"></i> ${esc(b.folder)}</div>` : ''}<div class="stbs-meta">#${b.mesId} · ${fmtDate(b.created)}</div></div></div>` });
+        }
+        if (!rows.length) return '';
+        total += rows.length;
+        rows.sort((a, b) => a.t - b.t);
+        const open = ui.libOpen?.get(ch.id) ?? (ch.isCur || !!q || !!tag);
+        return `<div class="stbs-lib-chat ${open ? 'open' : ''}">
+            <div class="stbs-lib-head" data-act="lib-toggle" data-chat="${esc(ch.id)}">
+                <i class="fa-solid fa-chevron-right stbs-lib-caret"></i>
+                <div class="stbs-grow"><b>${esc(ch.label)}</b>${ch.isCur ? ' <span class="stbs-badge">지금 채팅</span>' : ''}
+                <div class="stbs-meta">${[ch.notes.length && `노트 ${ch.notes.length}`, ch.bookmarks.length && `책갈피 ${ch.bookmarks.length}`, ch.items && `메시지 ${ch.items}`].filter(Boolean).join(' · ')}${ch.review?.rating ? ` · ${'★'.repeat(ch.review.rating)}` : ''}</div></div>
+                <span class="stbs-count-pill">${rows.length}</span>
+            </div>
+            ${open ? `<div class="stbs-lib-rows">${rows.map(r => r.html).join('')}</div>` : ''}
+        </div>`;
+    }).join('');
+    const chip = (v, label) => `<div class="stbs-chip ${kind === v ? 'active' : ''}" data-act="lib-kind" data-k="${v}">${label}</div>`;
+    return `
+        <div class="stbs-search-bar"><i class="fa-solid fa-magnifying-glass stbs-search-ico"></i>
+            <input id="stbs-lib-q" type="search" placeholder="모든 채팅의 노트·책갈피에서 찾기…" value="${esc(ui.libQ || '')}" autocomplete="off"></div>
+        <div class="stbs-row stbs-wrap">${chip('all', '전체')}${chip('note', '노트')}${chip('bookmark', '책갈피')}
+            <div class="stbs-chip stbs-sort" data-act="lib-refresh" title="다시 읽어 오기"><i class="fa-solid fa-rotate ${library.loading ? 'fa-spin' : ''}"></i></div></div>
+        ${tags.length ? `<div class="stbs-row stbs-wrap stbs-tag-row">${tags.slice(0, 20).map(([t, n]) => `<span class="stbs-tag ${tag === t ? 'on' : ''}" data-act="lib-tag" data-tag="${esc(t)}">#${esc(t)} <span class="stbs-dim">${n}</span></span>`).join('')}</div>` : ''}
+        <div class="stbs-count">채팅 ${library.chats.length}개${total ? ` · ${total}개 찾음` : ''}</div>
+        ${blocks || emptyState(q || tag ? '찾는 노트가 없어요' : '아직 다른 채팅에 남긴 기록이 없어요', q || tag ? '다른 단어로 찾아볼까요?' : '이 캐릭터와의 다른 채팅에서 칠한 문장과 책갈피가 여기에 모여요.', false)}`;
+}
+
+let pendingJump = null;
+/** Open another chat of this character, then go to the message (and note) there. */
+async function openChatAndJump(chatId, mesId, noteId) {
+    const c = ctx();
+    if (chatId === c.getCurrentChatId?.()) { jumpTo(mesId, noteId); return; }
+    pendingJump = { chatId, mesId, noteId, at: Date.now() };
+    toastr.info('🦊 그 채팅을 펼치는 중이에요…', '', { timeOut: 2000 });
+    try { await c.openCharacterChat(chatId); }
+    catch { pendingJump = null; toastr.warning('그 채팅을 열지 못했어요.'); }
+}
+function runPendingJump() {
+    const p = pendingJump;
+    if (!p || Date.now() - p.at > 30000) { pendingJump = null; return; }
+    if (ctx().getCurrentChatId?.() !== p.chatId) return;
+    pendingJump = null;
+    setTimeout(() => { if (settings().farReader && isFar(p.mesId)) openReader(p.mesId, { noteId: p.noteId }); else jumpTo(p.mesId, p.noteId); }, 700);
 }
 
 // ---------------------------------------------------------------- export / import
@@ -2889,7 +3967,7 @@ function buildMarkdown() {
 
     section([...d.bookmarks].sort((a, b) => a.mesId - b.mesId), '🦊 책갈피', (b) => {
         const text = plain(msg(b.mesId)?.mes);
-        lines.push(`- **${b.label || clip(text, 40)}** — ${speaker(b.mesId)} (#${b.mesId})`);
+        lines.push(`- **${b.label || clip(text, 40)}** — ${speaker(b.mesId)} (#${b.mesId})${b.folder ? ` 📁 ${b.folder}` : ''}`);
         if (b.label) lines.push(`  > ${clip(text, 200)}`);
     });
     if (d.bookmarks.length) lines.push('');
@@ -2990,6 +4068,7 @@ function buildSettingsUI() {
                 <label class="checkbox_label"><input type="checkbox" data-set="showChapters"> <span>채팅에 챕터 구분선 보이기</span></label>
                 <label class="checkbox_label"><input type="checkbox" data-set="showRibbon"> <span>책갈피 꽂은 메시지에 리본 표시</span></label>
                 <label class="checkbox_label"><input type="checkbox" data-set="farReader"> <span>멀리 있는 옛날 메시지는 미리 읽기 창으로 먼저 보기</span></label>
+                <label class="checkbox_label"><input type="checkbox" data-set="dailyLine"> <span>패널 맨 위에 오늘의 문장 보이기</span></label>
                 <div class="stbs-set-row"><span>패널 테마</span>
                     <select class="text_pole stbs-select" data-set-theme>${Object.entries(PANEL_THEMES).map(([k, v]) => `<option value="${k}" ${s.theme === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
                 </div>
@@ -3106,9 +4185,12 @@ function onChatChanged() {
     closeModal();
     staleNotes.clear();
     ui.q = ''; ui.chapterScope = 'all'; ui.noteFilter = 'all'; ui.scrap = null; endSelecting();
+    ui.noteTag = ''; ui.dailyShift = 0;
+    library.at = 0;
     reconcile();
     setTimeout(decorateAll, 50);
     refreshPanel();
+    runPendingJump();
 }
 
 function bindGlobal() {
