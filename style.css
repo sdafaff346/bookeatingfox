@@ -191,6 +191,7 @@
     margin: 26px 12px 12px;
     cursor: pointer;
     user-select: none;
+    -webkit-user-select: none;
 }
 .stbs-chapter-line { flex: 1; height: 1px; background: currentColor; opacity: .14; }
 .stbs-chapter-title {
