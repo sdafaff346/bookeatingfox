@@ -38,7 +38,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
-const VERSION = '1.17.0';
+const VERSION = '1.17.1';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -1398,7 +1398,7 @@ function placePopup(pop, rect) {
 // Floating selection tools from other extensions (e.g. Blue Lemonade "다시 쓰기" quick-ban chip,
 // LLM translator selection bar, 로그 발췌(text-to-image-converter) camera chip and its menu).
 // Our toolbar moves out of their way instead of covering them.
-const OTHER_SELECTION_TOOLS = ['.bwr_quickban', '#llmt-selection-selection', '.tti-selection-float.is-visible', '.tti-selection-float.menu-open .tti-selection-menu'];
+const OTHER_SELECTION_TOOLS = ['.bwr_quickban', '#llmt-selection-selection', '#cg-select-chip', '#llmt-select-delete', '.tti-selection-float.is-visible', '.tti-selection-float.menu-open .tti-selection-menu'];
 
 function avoidOtherPopups(pop) {
     const mine = () => pop.getBoundingClientRect();
@@ -3151,6 +3151,7 @@ function openPanel(tab) {
         p.addEventListener('animationend', () => p.classList.remove('anim'), { once: true });
     }
     themed(p); // pick up the theme's current fonts/colours every time the panel opens
+    p.style.zIndex = '';
     p.classList.add('open');
     document.body.classList.add('stbs-panel-open');
     renderPanel();
@@ -3197,6 +3198,25 @@ function placePanel() {
         const dlg = $id('stbs-dialog');
         if (dlg?.open) dlg.close();
         if (p.parentElement !== document.body) document.body.appendChild(p);
+    }
+}
+
+/**
+ * Desktop: the window you touched last comes to the front. Another extension's floating window
+ * (e.g. 봇 테스터) sits just under ours by z-index, so tapping it would never bring it forward —
+ * we step back below it instead, and come forward again when our panel is touched or reopened.
+ */
+function raiseOrLowerPanel(target) {
+    const p = $id('stbs-panel');
+    if (!p || !p.classList.contains('open') || isMobile() || !target?.closest) return;
+    if (target.closest('#stbs-panel, #stbs-modal, #stbs-sel-pop')) { if (p.style.zIndex) p.style.zIndex = ''; return; }
+    const ours = Number(getComputedStyle(p).zIndex) || 3010;
+    for (let el = target; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed') continue;
+        const z = Number(cs.zIndex);
+        if (Number.isFinite(z) && z >= 1000 && z <= ours) p.style.zIndex = String(Math.max(1, z - 1));
+        return;
     }
 }
 
@@ -4748,6 +4768,7 @@ function bindGlobal() {
     document.addEventListener('selectionchange', onSelectionChange);
     document.addEventListener('pointerdown', (e) => {
         if (!e.target.closest?.('#stbs-sel-pop')) hideSelPopup();
+        raiseOrLowerPanel(e.target);
     }, true);
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
