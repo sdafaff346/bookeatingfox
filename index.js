@@ -21,6 +21,8 @@ const DEFAULTS = Object.freeze({
     cardShow: null,
     cardFox: true,
     cardTransFirst: false,
+    cardMasks: '',        // words hidden under tape on every card (comma separated)
+    cardMaskTape: 0,      // tape colour (MASK_TAPES)
     searchHidden: 'all',
     dailyLine: true,      // today's line at the top of the panel
     dailyHidden: {},      // chat id → day it was dismissed
@@ -36,7 +38,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
-const VERSION = '1.15.1';
+const VERSION = '1.17.0';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -64,30 +66,51 @@ const CARD_COMMU = {
 };
 const CARD_LAYOUTS = {
     underline: { name: '밑줄', tints: [
-        { name: '하양', bg: '#fbfaf7', fg: '#26231f', sub: '#857e74', cover: '#e9e4da' },
-        { name: '모래', bg: '#ece5d8', fg: '#2b2620', sub: '#7f7465', cover: '#dcd2c0' },
-        { name: '밤', bg: '#1f1e23', fg: '#efede9', sub: '#9c99a3', cover: '#2e2d33', dark: true },
+        { name: '하양', bg: '#fbfaf7', fg: '#26231f', sub: '#8a8378', line: '#e7e2d8', cover: '#e9e4da' },
+        { name: '모래', bg: '#efe8db', fg: '#2b2620', sub: '#82776a', line: '#ddd3c2', cover: '#dcd2c0' },
+        { name: '밤', bg: '#1d1c21', fg: '#f1efeb', sub: '#a29fa8', line: '#34333a', cover: '#2e2d33', dark: true },
     ] },
     page: { name: '책 한 쪽', tints: [
-        { name: '미색', bg: '#f4eee1', fg: '#2f2a22', sub: '#968b77' },
-        { name: '하양', bg: '#fbfbf8', fg: '#2a2a28', sub: '#979792' },
-        { name: '밤', bg: '#24221f', fg: '#e8e1d3', sub: '#8f877a', dark: true },
+        { name: '미색', bg: '#f5efe2', fg: '#2d2820', sub: '#958a76', line: '#e0d6c2' },
+        { name: '하양', bg: '#fbfbf8', fg: '#262624', sub: '#96968f', line: '#e6e6e0' },
+        { name: '밤', bg: '#211f1c', fg: '#ebe4d6', sub: '#958d80', line: '#38342e', dark: true },
+    ] },
+    minimal: { name: '미니멀', tints: [
+        { name: '종이', bg: '#f7f5f0', fg: '#1f1e1c', sub: '#8c887f', mark: '#b9b2a4', line: '#d9d4c9' },
+        { name: '그레이지', bg: '#e6e2da', fg: '#262522', sub: '#77736b', mark: '#a59f92', line: '#c9c3b7' },
+        { name: '남색', bg: '#1c2436', fg: '#eef1f7', sub: '#99a3ba', mark: '#d7b46a', line: '#34405a', dark: true },
+        { name: '먹', bg: '#141414', fg: '#f2f2f0', sub: '#8f8f8b', mark: '#c9a86a', line: '#2e2e2c', dark: true },
+    ] },
+    letter: { name: '편지지', tints: [
+        { name: '크림', bg: '#efe6d4', paper: '#fdf9f0', fg: '#2c2a33', sub: '#8a8173', rule: '#cfdcea', margin: '#ef9a9a', stamp: '#e8743b' },
+        { name: '하늘', bg: '#d7e3ee', paper: '#f7fbff', fg: '#1f2a3a', sub: '#6f7f93', rule: '#c4d6ea', margin: '#9db8e0', stamp: '#4f7cc7' },
+        { name: '분홍', bg: '#f3dbe0', paper: '#fff8f9', fg: '#3a2430', sub: '#9a7584', rule: '#f0cdd6', margin: '#e48aa3', stamp: '#d4587b' },
+    ] },
+    polaroid: { name: '폴라로이드', tints: [
+        { name: '코르크', bg: '#c9a57a', bg2: '#b88f62', frame: '#fbfaf6', fg: '#2a241d', sub: '#8a7f70', ink: '#2a241d', tape: 1 },
+        { name: '리넨', bg: '#e9e4da', bg2: '#ddd6c8', frame: '#ffffff', fg: '#2a2722', sub: '#8c8579', ink: '#2a2722', tape: 2 },
+        { name: '밤', bg: '#23252b', bg2: '#1a1b20', frame: '#f4f2ec', fg: '#f1efe9', sub: '#a3a1a8', ink: '#2a2722', tape: 3, dark: true },
+    ] },
+    memo: { name: '메모지', tints: [
+        { name: '노랑', bg: '#e7e2d9', note: '#ffe97f', fold: '#f2d65a', fg: '#2f2a14', sub: '#7d7140', tape: 0 },
+        { name: '분홍', bg: '#dfe6ea', note: '#ffc6d3', fold: '#f3a9ba', fg: '#3a1f27', sub: '#8d5a67', tape: 2 },
+        { name: '민트', bg: '#2d3238', note: '#bdebd6', fold: '#9bd8bd', fg: '#16362a', sub: '#4d7b69', tape: 3, darkBg: true },
     ] },
     subtitle: { name: '자막', tints: [
-        { name: '검정', veil: '0,0,0', fg: '#ffffff', tr: '#f2d479', sub: '#c9c9c9' },
-        { name: '남색', veil: '10,16,38', fg: '#ffffff', tr: '#a9c4ff', sub: '#b9c2d8' },
-        { name: '세피아', veil: '38,22,8', fg: '#fff8ee', tr: '#f6c48f', sub: '#d8c4ad' },
+        { name: '검정', veil: '0,0,0', fg: '#ffffff', tr: '#f2d479', sub: '#d6d6d6' },
+        { name: '남색', veil: '10,16,38', fg: '#ffffff', tr: '#a9c4ff', sub: '#c3cbe0' },
+        { name: '세피아', veil: '38,22,8', fg: '#fff8ee', tr: '#f6c48f', sub: '#e0cdb6' },
     ] },
     chat: { name: '말풍선', tints: [
-        { name: '하늘', bg: '#d6e2ec', bubble: '#ffffff', fg: '#1f2328', sub: '#5f6b77', pill: 'rgba(31,35,40,.09)', tr: '#f3f6f9' },
-        { name: '복숭아', bg: '#f5ded2', bubble: '#ffffff', fg: '#2a1f1a', sub: '#7d6559', pill: 'rgba(42,31,26,.09)', tr: '#fbf3ee' },
-        { name: '밤', bg: '#1b1e23', bubble: '#2d3239', fg: '#eceef1', sub: '#8d949e', pill: 'rgba(255,255,255,.09)', tr: '#252a30', dark: true },
+        { name: '하늘', bg: '#bacee0', bar: '#a9c0d6', bubble: '#ffffff', me: '#fff27a', fg: '#1b1f24', sub: '#55636f', pill: 'rgba(31,35,40,.10)', tr: '#f4f7fa' },
+        { name: '복숭아', bg: '#f6e1d6', bar: '#efd2c3', bubble: '#ffffff', me: '#ffd0b5', fg: '#2a1f1a', sub: '#80675a', pill: 'rgba(42,31,26,.09)', tr: '#fcf4ef' },
+        { name: '밤', bg: '#16191e', bar: '#1f242b', bubble: '#2c3239', me: '#3d5a80', fg: '#eceef1', sub: '#8d949e', pill: 'rgba(255,255,255,.09)', tr: '#232930', dark: true },
     ] },
     poster: { name: '포스터', tints: [
-        { name: '여우', bg: '#e8743b', fg: '#2a1408', sub: '#5e2a10', mark: '#fff1e4' },
-        { name: '숲', bg: '#26332a', fg: '#eef0e6', sub: '#a9b8a2', mark: '#e8913f' },
-        { name: '밤하늘', bg: '#1b2140', fg: '#eef0ff', sub: '#9aa3d4', mark: '#f2cf6c' },
-        { name: '먹', bg: '#161616', fg: '#f4f4f4', sub: '#9a9a9a', mark: '#e5533d' },
+        { name: '여우', bg: '#e8743b', fg: '#2a1408', sub: '#6a3214', mark: '#fff1e4' },
+        { name: '숲', bg: '#26332a', fg: '#eef0e6', sub: '#a9b8a2', mark: '#e8913f', dark: true },
+        { name: '밤하늘', bg: '#1b2140', fg: '#eef0ff', sub: '#9aa3d4', mark: '#f2cf6c', dark: true },
+        { name: '먹', bg: '#161616', fg: '#f4f4f4', sub: '#9a9a9a', mark: '#e5533d', dark: true },
         { name: '장미', bg: '#f4cbd3', fg: '#4b1f2a', sub: '#8c4e61', mark: '#c94a68' },
         { name: '민트', bg: '#cfeee2', fg: '#16392f', sub: '#4a7d6f', mark: '#2b9a77' },
     ] },
@@ -1723,11 +1746,234 @@ function drawCommunity(canvas, { text, trans = '', transFirst = false, who, chap
     }
 }
 
+// ---- name masking: chosen words are covered with a strip of tape on every card (v1.16)
+
+const MASK_TAPES = [
+    { name: '크래프트', kind: 'washi', base: '#d8bf8e', pat: 'fiber', ink: 'rgba(110,80,35,.16)' },
+    { name: '도트', kind: 'washi', base: '#f5c2cc', pat: 'dots', ink: 'rgba(255,255,255,.9)' },
+    { name: '줄무늬', kind: 'washi', base: '#b9e0d2', pat: 'stripe', ink: 'rgba(255,255,255,.75)' },
+    { name: '체크', kind: 'washi', base: '#f8df93', pat: 'gingham', ink: 'rgba(222,150,40,.26)' },
+    { name: '검정 펜', kind: 'marker', base: '#17171a' },
+    { name: '수정테이프', kind: 'correction', base: '#fcfcfa', edge: '#d9d9d3' },
+];
+
+/** The words to hide, longest first (so "패트릭 스미스" wins over "패트릭"). */
+function maskWords(raw = settings().cardMasks) {
+    const list = String(raw || '').split(/[,，、\n]/).map(w => w.trim()).filter(Boolean);
+    return [...new Set(list)].sort((a, b) => b.length - a.length);
+}
+
+/** Where the words sit inside one drawn string: merged [start, end) ranges. */
+function maskRanges(text, words) {
+    const low = String(text).toLowerCase();
+    const hits = [];
+    for (const w of words) {
+        const lw = w.toLowerCase();
+        let i = low.indexOf(lw);
+        while (i !== -1) { hits.push([i, i + lw.length]); i = low.indexOf(lw, i + lw.length); }
+    }
+    hits.sort((a, b) => a[0] - b[0]);
+    const out = [];
+    for (const h of hits) { const l = out[out.length - 1]; if (l && h[0] <= l[1]) l[1] = Math.max(l[1], h[1]); else out.push([...h]); }
+    return out;
+}
+
+/**
+ * A strip of tape centred on (cx, cy): washi paper tape with torn ends and a printed pattern,
+ * a black marker line, or a strip of correction tape. Also used as decoration on some cards.
+ */
+function drawStrip(g, cx, cy, TW, TH, angle, tape, seed = 1) {
+    const r = seeded(seed);
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(angle);
+    g.translate(-TW / 2, -TH / 2);
+    if (tape.kind === 'marker') {
+        // two quick passes of a felt pen, slightly uneven
+        const j = () => (r() - 0.5) * TH * 0.12;
+        g.lineCap = 'round'; g.lineJoin = 'round';
+        g.strokeStyle = tape.base;
+        for (const [lw, a] of [[TH * 1.02, 0.96], [TH * 0.86, 1]]) {
+            g.globalAlpha = a; g.lineWidth = lw;
+            g.beginPath();
+            g.moveTo(TH * 0.42, TH / 2 + j());
+            g.quadraticCurveTo(TW / 2, TH / 2 + j() * 2, TW - TH * 0.42, TH / 2 + j());
+            g.stroke();
+        }
+        g.restore();
+        return;
+    }
+    if (tape.kind === 'correction') {
+        g.shadowColor = 'rgba(0,0,0,.16)'; g.shadowBlur = TH * 0.16; g.shadowOffsetY = TH * 0.05;
+        roundPath(g, 0, 0, TW, TH, TH * 0.16);
+        g.fillStyle = tape.base; g.fill();
+        g.shadowColor = 'transparent';
+        g.save(); roundPath(g, 0, 0, TW, TH, TH * 0.16); g.clip();
+        g.fillStyle = 'rgba(0,0,0,.035)';
+        for (let x = TH * 0.2; x < TW; x += TH * 0.22) g.fillRect(x + (r() - 0.5) * 3, 0, 1.2, TH);
+        const sh = g.createLinearGradient(0, 0, 0, TH);
+        sh.addColorStop(0, 'rgba(255,255,255,.9)'); sh.addColorStop(0.5, 'rgba(255,255,255,0)'); sh.addColorStop(1, 'rgba(0,0,0,.06)');
+        g.fillStyle = sh; g.fillRect(0, 0, TW, TH);
+        g.restore();
+        g.strokeStyle = tape.edge; g.lineWidth = Math.max(1.5, TH * 0.03);
+        roundPath(g, 0, 0, TW, TH, TH * 0.16); g.stroke();
+        g.restore();
+        return;
+    }
+    // washi: straight long edges, torn short ends
+    const st = Math.max(3, TH / 9), d = TH * 0.09;
+    const r0 = seeded(Math.floor(r() * 1e9) + 1);
+    // draw the outline once into a Path2D so fill, clip and shadow share the exact edge
+    const p2 = new Path2D();
+    {
+        const rr = r0;
+        p2.moveTo(rr() * d * 0.5, 0);
+        p2.lineTo(TW - rr() * d * 0.5, 0);
+        for (let y = st; y < TH; y += st) p2.lineTo(TW - rr() * d, y);
+        p2.lineTo(TW - rr() * d * 0.5, TH);
+        p2.lineTo(rr() * d * 0.5, TH);
+        for (let y = TH - st; y > 0; y -= st) p2.lineTo(rr() * d, y);
+        p2.closePath();
+    }
+    g.shadowColor = 'rgba(0,0,0,.2)'; g.shadowBlur = TH * 0.2; g.shadowOffsetY = TH * 0.07;
+    g.fillStyle = tape.base; g.fill(p2);
+    g.shadowColor = 'transparent';
+    g.save(); g.clip(p2);
+    g.fillStyle = tape.ink;
+    if (tape.pat === 'dots') {
+        const sp = TH * 0.34, rad = TH * 0.075;
+        for (let row = 0, y = sp * 0.5; y < TH + sp; y += sp * 0.86, row++)
+            for (let x = (row % 2 ? sp / 2 : 0); x < TW + sp; x += sp) { g.beginPath(); g.arc(x, y, rad, 0, Math.PI * 2); g.fill(); }
+    } else if (tape.pat === 'stripe') {
+        const sp = TH * 0.34, bw = TH * 0.13;
+        for (let x = -TH; x < TW + TH; x += sp) { g.beginPath(); g.moveTo(x, TH); g.lineTo(x + TH * 0.6, 0); g.lineTo(x + TH * 0.6 + bw, 0); g.lineTo(x + bw, TH); g.closePath(); g.fill(); }
+    } else if (tape.pat === 'gingham') {
+        const sp = TH * 0.36, bw = TH * 0.18;
+        for (let x = 0; x < TW; x += sp) g.fillRect(x, 0, bw, TH);
+        for (let y = 0; y < TH; y += sp) g.fillRect(0, y, TW, bw);
+    } else {
+        // kraft fibres
+        for (let k = 0; k < TW / 6; k++) {
+            g.globalAlpha = 0.35 + r() * 0.5;
+            g.fillRect(r() * TW, r() * TH, 4 + r() * TH * 0.5, 1);
+        }
+        g.globalAlpha = 1;
+    }
+    // the light catches the top of the tape; a soft crease runs along it
+    const sh = g.createLinearGradient(0, 0, 0, TH);
+    sh.addColorStop(0, 'rgba(255,255,255,.32)'); sh.addColorStop(0.42, 'rgba(255,255,255,.04)'); sh.addColorStop(1, 'rgba(0,0,0,.07)');
+    g.fillStyle = sh; g.fillRect(0, 0, TW, TH);
+    g.fillStyle = 'rgba(255,255,255,.22)';
+    g.fillRect(0, TH * (0.55 + (r() - 0.5) * 0.2), TW, Math.max(1, TH * 0.025));
+    g.restore();
+    g.strokeStyle = 'rgba(0,0,0,.07)'; g.lineWidth = 1;
+    g.stroke(p2);
+    g.restore();
+}
+
+/** Tape over one masked word: a little longer than the word, never quite straight. */
+function drawTape(g, x, top, w, h, seed, tape) {
+    const r = seeded(seed);
+    const flat = tape.kind === 'correction';
+    const padL = h * (flat ? 0.08 : tape.kind === 'marker' ? 0.02 : 0.1 + r() * 0.04), padR = h * (flat ? 0.08 : tape.kind === 'marker' ? 0.02 : 0.1 + r() * 0.04);
+    const TW = w + padL + padR;
+    const tilt = tape.kind === 'marker' ? (r() - 0.5) * 0.02 : flat ? 0 : (r() - 0.5) * 0.05;
+    drawStrip(g, x - padL + TW / 2, top + h / 2, TW, h, tilt, tape, seed);
+}
+
+/** Make every fillText on this card cover the masked words with tape right after drawing them. */
+function maskContext(g) {
+    if (g.__stbsMask) return;
+    g.__stbsMask = true;
+    const fill = CanvasRenderingContext2D.prototype.fillText;
+    g.fillText = function (text, x, y, maxWidth) {
+        if (maxWidth === undefined) fill.call(this, text, x, y); else fill.call(this, text, x, y, maxWidth);
+        const words = this.__stbsWords;
+        if (!words?.length || text == null) return;
+        const str = String(text);
+        const ranges = maskRanges(str, words);
+        if (!ranges.length) return;
+        const fs = Number((this.font.match(/(\d+(?:\.\d+)?)px/) || [])[1]) || 30;
+        const total = this.measureText(str).width;
+        const scale = maxWidth !== undefined && total > maxWidth ? maxWidth / total : 1;
+        const al = this.textAlign;
+        const x0 = al === 'center' ? x - total * scale / 2 : (al === 'right' || al === 'end') ? x - total * scale : x;
+        const bl = this.textBaseline;
+        const top = bl === 'middle' ? y - fs * 0.62 : (bl === 'top' || bl === 'hanging') ? y - fs * 0.08 : y - fs * 0.92;
+        this.save();
+        this.shadowColor = 'transparent';
+        for (const [a, b] of ranges) {
+            const sx = x0 + this.measureText(str.slice(0, a)).width * scale;
+            const w = this.measureText(str.slice(a, b)).width * scale;
+            drawTape(this, sx, top, w, fs * 1.2, Math.round(sx * 7 + y * 13 + a * 31), this.__stbsTape || MASK_TAPES[0]);
+        }
+        this.restore();
+    };
+}
+/** v1.16.1 changed the tape list; keep the look people picked before. */
+function migrateTape(s) {
+    if (s.cardMaskTapeV === 2) return;
+    s.cardMaskTape = ({ 0: 0, 1: 5, 2: 1, 3: 4 })[s.cardMaskTape] ?? 0;
+    s.cardMaskTapeV = 2;
+}
+function armMasks(g) {
+    maskContext(g);
+    const s = settings();
+    migrateTape(s);
+    g.__stbsWords = maskWords(s.cardMasks);
+    g.__stbsTape = MASK_TAPES[s.cardMaskTape] || MASK_TAPES[0];
+}
+
+/** CSS look of a tape for its button. */
+function tapeSwatch(t) {
+    if (t.pat === 'dots') return `radial-gradient(circle, ${t.ink} 26%, transparent 28%) 0 0 / 7px 7px, ${t.base}`;
+    if (t.pat === 'stripe') return `repeating-linear-gradient(60deg, ${t.ink} 0 2px, transparent 2px 6px), ${t.base}`;
+    if (t.pat === 'gingham') return `repeating-linear-gradient(0deg, ${t.ink} 0 3px, transparent 3px 6px), repeating-linear-gradient(90deg, ${t.ink} 0 3px, transparent 3px 6px), ${t.base}`;
+    return t.base;
+}
+
+/** The "이름 가리기" box for every card editor. */
+function maskSectionHtml() {
+    const s = settings();
+    migrateTape(s);
+    const c = ctx();
+    const names = [...new Set([c.name2, c.name1].filter(Boolean))].filter(n => !maskWords().includes(n));
+    return `<section class="stbs-cx-sec stbs-mask-box">
+        <div class="stbs-cx-h">이름 가리기 <span class="stbs-dim">테이프</span></div>
+        <input id="stbs-card-mask" class="text_pole" placeholder="가릴 단어 (쉼표로 여러 개) 예: 패트릭, 엘리" value="${esc(s.cardMasks || '')}">
+        ${names.length ? `<div class="stbs-mask-sugg">${names.map(n => `<button type="button" class="stbs-chip" data-mask-add="${esc(n)}"><i class="fa-solid fa-plus"></i> ${esc(n)}</button>`).join('')}</div>` : ''}
+        <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints">${MASK_TAPES.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === (s.cardMaskTape || 0) ? 'active' : ''}" data-tape="${k}"><span class="stbs-tape-sw" style="background:${tapeSwatch(t)}" data-kind="${t.kind}"></span>${t.name}</button>`).join('')}</div></div>
+        <div class="stbs-hint">카드에 그려지는 글자 중 이 단어만 테이프로 가려요. "패트릭은 심심했다" → 패트릭만 가려지고 "은 심심했다"는 그대로예요. 모든 카드에 똑같이 적용돼요.</div>
+    </section>`;
+}
+function bindMaskSection(body, redraw) {
+    const s = settings();
+    const inp = body.querySelector('#stbs-card-mask');
+    if (!inp) return;
+    const later = debounce(redraw, 150);
+    inp.addEventListener('input', (e) => { e.stopPropagation(); s.cardMasks = inp.value; saveSettings(); later(); });
+    body.querySelectorAll('[data-mask-add]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const w = b.dataset.maskAdd;
+        if (!maskWords(inp.value).includes(w)) inp.value = inp.value.trim() ? `${inp.value.replace(/[,\s]+$/, '')}, ${w}` : w;
+        s.cardMasks = inp.value; saveSettings();
+        b.remove(); redraw();
+    }));
+    body.querySelectorAll('[data-tape]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        s.cardMaskTape = Number(b.dataset.tape); saveSettings();
+        body.querySelectorAll('[data-tape]').forEach(x => x.classList.toggle('active', x === b));
+        redraw();
+    }));
+}
+
 // ---- shared pieces for every card design
 
 /** Fit the quote (and its translation) into a box: the first block is the big one. */
 function fitQuote(g, { main, sub, transFirst = false, font, maxW, avail, max = 60, min = 22, lh = 1.6, subScale = 0.72, gap = 56, para = 0.55, prep = (s) => s }) {
     main = String(main || '').trim(); sub = String(sub || '').trim();
+    // short lines may grow: a one-liner should fill the card, not float in it
+    if (max > min) { const n = (main + sub).replace(/\s+/g, '').length; max = Math.round(max * (n <= 24 ? 1.38 : n <= 48 ? 1.24 : n <= 80 ? 1.1 : 1)); }
     const blocks = sub ? (transFirst ? [sub, main] : [main, sub]) : [main];
     const measure = (size) => {
         let total = sub ? gap : 0;
@@ -1761,7 +2007,7 @@ function fitQuote(g, { main, sub, transFirst = false, font, maxW, avail, max = 6
 }
 
 /** Draw fitted blocks from y. onLine(b, x, top, width, baseline) runs before each line (markers…). */
-function drawLaid(g, m, { x, y, w, align = 'left', color, subColor, font, justify = false, onLine, divider, only }) {
+function drawLaid(g, m, { x, y, w, align = 'left', color, subColor, font, justify = false, justifyMax = 0.9, onLine, divider, only }) {
     m.laid.forEach((b, k) => {
         if (only !== undefined && only !== k) return;
         g.font = font(b.fs, b.small);
@@ -1778,7 +2024,7 @@ function drawLaid(g, m, { x, y, w, align = 'left', color, subColor, font, justif
             const plain = justify ? words.reduce((a, s) => a + g.measureText(s).width, 0) : 0;
             const sp = justify && words.length > 1 ? (w - plain) / (words.length - 1) : 0;
             // justify like a book, but never with holes wider than about one letter
-            if (justify && !last && words.length > 1 && sp < b.fs * 0.9) {
+            if (justify && !last && words.length > 1 && sp < b.fs * justifyMax) {
                 let cx = x;
                 for (const s of words) { g.fillText(s, cx, base); cx += g.measureText(s).width + sp; }
             } else g.fillText(l, lx, base);
@@ -1834,80 +2080,300 @@ function roundPath(g, x, y, w, h, r) {
 
 // ---- the designs
 
+/** Title row + footer shared by the quiet designs. */
+function cardFooterRow(g, I, t, { x, y, w, whoFont, whoColor }) {
+    if (I.show.who && I.who) { g.fillStyle = whoColor || t.fg; g.font = whoFont || `600 30px ${I.ui}`; g.fillText(fitText(g, I.who, w * 0.6), x, y); }
+    let rx = x + w;
+    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `26px ${I.ui}`; const p = `p. ${I.page}`; const pw = g.measureText(p).width; g.fillText(p, rx - pw, y); rx -= pw + 24; }
+    if (I.show.fox) foxStamp(g, rx - 24, y - 10, 26);
+}
+
 function cardUnderline(g, W, H, I, t, A) {
     g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
-    const M = 96, ui = I.ui;
+    const M = 96, ui = I.ui, maxW = W - M * 2;
     const hasCover = I.show.avatar && A.thumb;
-    const rowH = hasCover ? 132 : 84;
+    const hasHead = hasCover || I.title || (I.show.chapter && I.chapter);
+    const rowH = hasCover ? 124 : 80;
     let tx = M;
+    g.textBaseline = 'alphabetic';
     if (hasCover) {
         g.save();
-        g.shadowColor = 'rgba(0,0,0,.18)'; g.shadowBlur = 18; g.shadowOffsetY = 6;
-        g.fillStyle = t.cover; roundPath(g, M, M, 96, rowH, 10); g.fill();
+        g.shadowColor = 'rgba(0,0,0,.2)'; g.shadowBlur = 18; g.shadowOffsetY = 6;
+        g.fillStyle = t.cover; roundPath(g, M, M, 90, rowH, 8); g.fill();
         g.restore();
-        g.save(); roundPath(g, M, M, 96, rowH, 10); g.clip(); coverImage(g, A.thumb, M, M, 96, rowH); g.restore();
-        tx = M + 96 + 30;
+        g.save(); roundPath(g, M, M, 90, rowH, 8); g.clip(); coverImage(g, A.thumb, M, M, 90, rowH); g.restore();
+        tx = M + 90 + 30;
     }
-    g.textBaseline = 'alphabetic';
-    g.fillStyle = t.fg; g.font = `700 36px ${ui}`;
-    g.fillText(fitText(g, I.title, W - tx - M), tx, M + (hasCover ? 54 : 34));
-    if (I.show.chapter && I.chapter) {
-        g.fillStyle = t.sub; g.font = `28px ${ui}`;
-        g.fillText(fitText(g, I.chapter, W - tx - M), tx, M + (hasCover ? 98 : 78));
-    }
-    const top = M + rowH + 72, bottom = H - M - 110, maxW = W - M * 2;
+    const midY = M + rowH / 2;
+    const two = I.title && I.show.chapter && I.chapter;
+    if (I.title) { g.fillStyle = t.fg; g.font = `700 36px ${ui}`; g.fillText(fitText(g, I.title, W - tx - M), tx, two ? midY - 6 : midY + 12); }
+    if (I.show.chapter && I.chapter) { g.fillStyle = t.sub; g.font = `28px ${ui}`; g.fillText(fitText(g, I.chapter, W - tx - M), tx, I.title ? midY + 38 : midY + 10); }
+    const headBottom = hasHead ? M + rowH + 40 : M;
+    if (hasHead) { g.fillStyle = t.line; g.fillRect(M, headBottom, maxW, 2); }
+    const fy = H - M;
+    const footTop = fy - 62;
+    g.fillStyle = t.line; g.fillRect(M, footTop, maxW, 2);
+    const top = headBottom + 70, bottom = footTop - 70;
     const font = (fs, small) => `${small ? 400 : 500} ${fs}px ${I.read}`;
-    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 58, min: 24, lh: 1.8, subScale: 0.7, gap: 60 });
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 66, min: 26, lh: 1.78, subScale: 0.68, gap: 60 });
     const r = seeded(I.seed);
-    const y0 = top + Math.max(0, bottom - top - m.total) * 0.42;
+    const y0 = top + Math.max(0, bottom - top - m.total) * 0.46;
     drawLaid(g, m, {
         x: M, y: y0, w: maxW, color: t.fg, subColor: t.sub, font,
         onLine: (b, lx, ly, lw, base) => {
             if (b.small) return;
             // a marker stroke: a little uneven, under the lower part of the letters
             g.save();
-            g.globalAlpha = t.dark ? 0.42 : 0.6;
+            g.globalAlpha = t.dark ? 0.42 : 0.62;
             g.fillStyle = I.hl;
             const j1 = (r() - 0.5) * 6, j2 = (r() - 0.5) * 6;
             g.beginPath();
-            g.moveTo(lx - 8, base - b.fs * 0.5 + j1);
-            g.lineTo(lx + lw + 10, base - b.fs * 0.54 + j2);
+            g.moveTo(lx - 8, base - b.fs * 0.48 + j1);
+            g.quadraticCurveTo(lx + lw / 2, base - b.fs * 0.52 + (j1 + j2) / 2, lx + lw + 10, base - b.fs * 0.5 + j2);
             g.lineTo(lx + lw + 6, base + b.fs * 0.2 + j2);
-            g.lineTo(lx - 6, base + b.fs * 0.24 + j1);
+            g.quadraticCurveTo(lx + lw / 2, base + b.fs * 0.26, lx - 6, base + b.fs * 0.22 + j1);
             g.closePath(); g.fill();
             g.restore();
         },
         divider: (dy) => { g.fillStyle = t.sub; g.globalAlpha = 0.5; g.fillRect(M, dy - 1, 48, 3); g.globalAlpha = 1; },
     });
-    const fy = H - M;
-    if (I.show.who && I.who) { g.fillStyle = t.fg; g.font = `600 30px ${ui}`; g.fillText(fitText(g, I.who, maxW * 0.6), M, fy); }
-    let rx = W - M;
-    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `28px ${ui}`; const p = `p. ${I.page}`; const pw = g.measureText(p).width; g.fillText(p, rx - pw, fy); rx -= pw + 22; }
-    if (I.show.fox) foxStamp(g, rx - 24, fy - 10, 26);
+    cardFooterRow(g, I, t, { x: M, y: fy, w: maxW });
 }
 
 function cardPage(g, W, H, I, t, A) {
     g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
-    // the bound edge of a book page
-    const sp = g.createLinearGradient(0, 0, 90, 0);
-    sp.addColorStop(0, t.dark ? 'rgba(0,0,0,.45)' : 'rgba(60,40,10,.13)');
+    // the bound edge of a book page and a little wear on the outer edge
+    const sp = g.createLinearGradient(0, 0, 110, 0);
+    sp.addColorStop(0, t.dark ? 'rgba(0,0,0,.5)' : 'rgba(60,40,10,.16)');
     sp.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = sp; g.fillRect(0, 0, 90, H);
-    const M = 110, ui = I.ui, maxW = W - M * 2;
+    g.fillStyle = sp; g.fillRect(0, 0, 110, H);
+    const ed = g.createLinearGradient(W - 40, 0, W, 0);
+    ed.addColorStop(0, 'rgba(0,0,0,0)'); ed.addColorStop(1, t.dark ? 'rgba(0,0,0,.25)' : 'rgba(60,40,10,.06)');
+    g.fillStyle = ed; g.fillRect(W - 40, 0, 40, H);
+    const M = 120, ui = I.ui, maxW = W - M * 2;
     g.textBaseline = 'alphabetic';
-    g.fillStyle = t.sub; g.font = `26px ${ui}`;
-    g.fillText(fitText(g, I.title, maxW / 2 - 20), M, 100);
-    if (I.show.chapter && I.chapter) { const c = fitText(g, I.chapter, maxW / 2 - 20); g.fillText(c, W - M - g.measureText(c).width, 100); }
-    const top = 190, bottom = H - 230;
+    // running head: book on the left page, chapter on the right
+    g.fillStyle = t.sub; g.font = `24px ${ui}`;
+    const head = I.title ? fitText(g, I.title, maxW / 2 - 20) : '';
+    if (head) g.fillText(head, M, 104);
+    if (I.show.chapter && I.chapter) { const c = fitText(g, I.chapter, maxW / 2 - 20); g.fillText(c, W - M - g.measureText(c).width, 104); }
+    if (head || (I.show.chapter && I.chapter)) { g.fillStyle = t.line; g.fillRect(M, 126, maxW, 2); }
+    const top = 200, bottom = H - 210;
     const font = (fs) => `${fs}px ${I.read}`;
     const indent = (s) => String(s).split('\n').map(l => l.trim() ? '　' + l.trim() : l).join('\n');
-    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top - 70, max: 50, min: 22, lh: 1.9, subScale: 0.8, gap: 52, prep: indent });
-    let y = top + Math.max(0, bottom - top - 70 - m.total) / 2;
-    y = drawLaid(g, m, { x: M, y, w: maxW, color: t.fg, subColor: t.sub, font, justify: true,
-        divider: (dy) => { g.fillStyle = t.sub; g.font = `24px ${I.read}`; const s = '*'; g.fillText(s, (W - g.measureText(s).width) / 2, dy + 10); } });
-    if (I.show.who && I.who) { g.fillStyle = t.sub; g.font = `italic 28px ${I.read}`; const s = `— ${I.who}`; g.fillText(s, W - M - g.measureText(s).width, y + 52); }
-    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `30px ${ui}`; const p = String(I.page); g.fillText(p, (W - g.measureText(p).width) / 2, H - 92); }
-    if (I.show.fox) foxStamp(g, W - M + 20, H - 102, 24);
+    const whoH = I.show.who && I.who ? 80 : 0;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top - whoH, max: 56, min: 24, lh: 1.9, subScale: 0.8, gap: 56, prep: indent });
+    let y = top + Math.max(0, bottom - top - whoH - m.total) * 0.45;
+    y = drawLaid(g, m, { x: M, y, w: maxW, color: t.fg, subColor: t.sub, font, justify: true, justifyMax: 0.3,
+        divider: (dy) => { g.fillStyle = t.sub; g.font = `26px ${I.read}`; const s = '·  ·  ·'; g.fillText(s, (W - g.measureText(s).width) / 2, dy + 10); } });
+    if (whoH) { g.fillStyle = t.sub; g.font = `italic 30px ${I.read}`; const s = `— ${I.who}`; g.fillText(fitText(g, s, maxW), W - M - Math.min(maxW, g.measureText(s).width), y + 56); }
+    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `26px ${ui}`; const p = `— ${I.page} —`; g.fillText(p, (W - g.measureText(p).width) / 2, H - 96); }
+    if (I.show.fox) foxStamp(g, W - M + 10, H - 106, 24);
+}
+
+function cardMinimal(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    const F = 46;
+    g.strokeStyle = t.line; g.lineWidth = 2;
+    g.strokeRect(F, F, W - F * 2, H - F * 2);
+    const M = 130, ui = I.ui, maxW = W - M * 2;
+    g.textBaseline = 'alphabetic';
+    if (I.title) {
+        g.fillStyle = t.sub; g.font = `600 22px ${ui}`;
+        if ('letterSpacing' in g) g.letterSpacing = '6px';
+        const s = fitText(g, I.title.toUpperCase(), maxW);
+        g.fillText(s, (W - g.measureText(s).width) / 2, F + 74);
+        if ('letterSpacing' in g) g.letterSpacing = '0px';
+    }
+    const font = (fs, small) => `${small ? 400 : 500} ${fs}px ${I.read}`;
+    const hasWho = I.show.who && I.who, hasCh = I.show.chapter && I.chapter;
+    const signH = (hasWho || hasCh) ? 50 + (hasWho ? 44 : 0) + (hasCh ? 38 : 0) : 0;
+    const markH = 96;
+    const top = F + 140, bottom = H - F - 120;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top - markH - signH, max: 62, min: 24, lh: 1.72, subScale: 0.66, gap: 48 });
+    const block = markH + m.total + signH;
+    let y = top + Math.max(0, bottom - top - block) * 0.48;
+    quoteMark(g, (W - 64 * 1.27) / 2, y, 64, t.mark);
+    y += markH;
+    y = drawLaid(g, m, { x: M, y, w: maxW, align: 'center', color: t.fg, subColor: t.sub, font,
+        divider: (dy) => { g.fillStyle = t.mark; g.fillRect((W - 36) / 2, dy - 1, 36, 2); } });
+    if (signH) {
+        y += 34;
+        g.fillStyle = t.mark; g.fillRect((W - 44) / 2, y, 44, 3);
+        y += 16;
+        if (hasWho) { y += 40; g.fillStyle = t.fg; g.font = `600 30px ${ui}`; const s = fitText(g, I.who, maxW); g.fillText(s, (W - g.measureText(s).width) / 2, y); }
+        if (hasCh) { y += 38; g.fillStyle = t.sub; g.font = `24px ${ui}`; const s = fitText(g, I.chapter, maxW); g.fillText(s, (W - g.measureText(s).width) / 2, y); }
+    }
+    const by = H - F - 44;
+    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `24px ${ui}`; g.fillText(`p. ${I.page}`, F + 40, by); }
+    if (I.show.fox) foxStamp(g, W - F - 64, by - 10, 24);
+}
+
+/** A postage stamp with a perforated edge; the fox looks out of it. */
+function postStamp(g, x, y, w, h, color, withFox, seed) {
+    const r = seeded(seed);
+    g.save();
+    g.translate(x + w / 2, y + h / 2); g.rotate(0.05 + (r() - 0.5) * 0.03); g.translate(-w / 2, -h / 2);
+    g.shadowColor = 'rgba(0,0,0,.18)'; g.shadowBlur = 10; g.shadowOffsetY = 3;
+    g.fillStyle = '#fffdf7'; g.fillRect(0, 0, w, h);
+    g.shadowColor = 'transparent';
+    // perforation: little bites along every edge
+    g.globalCompositeOperation = 'destination-out';
+    const bite = 7, step = 18;
+    for (let px = step / 2; px < w; px += step) { g.beginPath(); g.arc(px, 0, bite, 0, Math.PI * 2); g.arc(px, h, bite, 0, Math.PI * 2); g.fill(); }
+    for (let py = step / 2; py < h; py += step) { g.beginPath(); g.arc(0, py, bite, 0, Math.PI * 2); g.arc(w, py, bite, 0, Math.PI * 2); g.fill(); }
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = color; g.fillRect(14, 14, w - 28, h - 28);
+    g.fillStyle = '#fff6ea'; g.fillRect(20, 20, w - 40, h - 40);
+    if (withFox && foxImage?.complete && foxImage.naturalWidth) { const s = Math.min(w, h) - 58; g.drawImage(foxImage, (w - s) / 2, (h - s) / 2 - 4, s, s); }
+    g.restore();
+    // postmark rings over the corner
+    g.save();
+    g.strokeStyle = 'rgba(60,60,70,.35)'; g.lineWidth = 2.5;
+    const cx = x - 6, cy = y + h * 0.72;
+    for (const rr of [44, 34]) { g.beginPath(); g.arc(cx, cy, rr, 0, Math.PI * 2); g.stroke(); }
+    for (let k = 0; k < 4; k++) { g.beginPath(); g.moveTo(cx + 54, cy - 18 + k * 12); g.bezierCurveTo(cx + 80, cy - 30 + k * 12, cx + 100, cy - 6 + k * 12, cx + 130, cy - 18 + k * 12); g.stroke(); }
+    g.restore();
+}
+
+function cardLetter(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    const P = { x: 64, y: 64, w: W - 128, h: H - 128 };
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,.16)'; g.shadowBlur = 30; g.shadowOffsetY = 10;
+    g.fillStyle = t.paper; g.fillRect(P.x, P.y, P.w, P.h);
+    g.restore();
+    const ui = I.ui, mx = P.x + 120, tx = mx + 34, maxW = P.x + P.w - 74 - tx;
+    g.fillStyle = t.margin; g.fillRect(mx, P.y, 2.5, P.h);
+    g.textBaseline = 'alphabetic';
+    const stampW = 132, stampH = 160;
+    postStamp(g, P.x + P.w - stampW - 50, P.y + 46, stampW, stampH, t.stamp, I.show.fox, I.seed);
+    let hy = P.y + 92;
+    if (I.title) { g.fillStyle = t.fg; g.font = `600 32px ${ui}`; g.fillText(fitText(g, `To. ${I.title}`, P.w - stampW - 240), tx, hy); hy += 44; }
+    if (I.show.chapter && I.chapter) { g.fillStyle = t.sub; g.font = `24px ${ui}`; g.fillText(fitText(g, I.chapter, P.w - stampW - 240), tx, hy); }
+    const font = (fs) => `${fs}px ${I.read}`;
+    const top = P.y + 250, bottom = P.y + P.h - 150;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 50, min: 24, lh: 2.0, subScale: 0.82, gap: 0, para: 1 });
+    const L = m.laid[0].lh, fs0 = m.laid[0].fs;
+    // ruled lines, set so the writing sits on them
+    const off = L / 2 + fs0 * 0.36 + fs0 * 0.24;
+    g.fillStyle = t.rule;
+    for (let ry = top + off; ry < P.y + P.h - 40; ry += L) g.fillRect(P.x + 30, ry, P.w - 60, 2);
+    for (let ry = top + off - L; ry > P.y + 210; ry -= L) g.fillRect(P.x + 30, ry, P.w - 60, 2);
+    const y = drawLaid(g, m, { x: tx, y: top, w: maxW, color: t.fg, subColor: t.sub, font });
+    if (I.show.who && I.who) {
+        g.fillStyle = t.fg; g.font = `600 ${Math.max(28, Math.round(fs0 * 0.8))}px ${I.read}`;
+        const s = `from. ${I.who}`;
+        const fx = P.x + P.w - 74 - g.measureText(s).width;
+        g.fillText(fitText(g, s, maxW), Math.max(tx, fx), y + L - (L - fs0) / 2 - fs0 * 0.14 + 0);
+    }
+    if (I.show.page && I.page) { g.fillStyle = t.sub; g.font = `22px ${ui}`; g.fillText(`p. ${I.page}`, tx, P.y + P.h - 44); }
+}
+
+function cardPolaroid(g, W, H, I, t, A) {
+    const bg = g.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, t.bg); bg.addColorStop(1, t.bg2);
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    const r = seeded(I.seed);
+    if (!t.dark) { g.fillStyle = 'rgba(80,50,20,.08)'; for (let k = 0; k < 900; k++) g.fillRect(r() * W, r() * H, 2 + r() * 3, 2 + r() * 2); }
+    const pad = 34, strip = 120;
+    const M = 110, maxW = W - M * 2;
+    const font = (fs, small) => `${small ? 400 : 600} ${fs}px ${I.read}`;
+    const py = H >= 1800 ? 200 : 96;
+    // the photo gives way when the line is long, so the words stay readable
+    let PW, photo, PH, top, bottom, m;
+    for (const k of [0.62, 0.54, 0.46, 0.4]) {
+        PW = Math.round(Math.min(W * k, H * (k - 0.06) - 120 + pad));
+        photo = PW - pad * 2; PH = pad + photo + strip;
+        top = py + PH + 90; bottom = H - 140;
+        m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 52, min: 22, lh: 1.6, subScale: 0.7, gap: 34 });
+        if (m.laid[0].fs >= 36) break;
+    }
+    const px = (W - PW) / 2;
+    const ang = -0.045 + (r() - 0.5) * 0.02;
+    g.save();
+    g.translate(px + PW / 2, py + PH / 2); g.rotate(ang); g.translate(-PW / 2, -PH / 2);
+    g.shadowColor = 'rgba(0,0,0,.32)'; g.shadowBlur = 34; g.shadowOffsetY = 16;
+    g.fillStyle = t.frame; g.fillRect(0, 0, PW, PH);
+    g.shadowColor = 'transparent';
+    const img = I.show.avatar ? (A.full || A.thumb) : null;
+    g.save(); g.beginPath(); g.rect(pad, pad, photo, photo); g.clip();
+    if (img) coverImage(g, img, pad, pad, photo, photo);
+    else {
+        const pg = g.createLinearGradient(pad, pad, pad + photo, pad + photo);
+        pg.addColorStop(0, '#f2c7a8'); pg.addColorStop(1, '#9fb7c9');
+        g.fillStyle = pg; g.fillRect(pad, pad, photo, photo);
+        if (I.show.fox) foxStamp(g, pad + photo / 2, pad + photo / 2, photo * 0.2);
+    }
+    // a little film fade
+    const fd = g.createLinearGradient(0, pad, 0, pad + photo);
+    fd.addColorStop(0, 'rgba(255,240,220,.10)'); fd.addColorStop(1, 'rgba(60,30,10,.12)');
+    g.fillStyle = fd; g.fillRect(pad, pad, photo, photo);
+    g.restore();
+    g.textBaseline = 'alphabetic';
+    const cap = [I.show.who && I.who, I.show.chapter && I.chapter].filter(Boolean);
+    if (cap.length) {
+        g.fillStyle = t.ink; g.font = `600 34px ${I.read}`;
+        g.fillText(fitText(g, cap[0], photo), pad + 4, pad + photo + 62);
+        if (cap[1]) { g.fillStyle = '#8b8478'; g.font = `24px ${I.ui}`; g.fillText(fitText(g, cap[1], photo), pad + 4, pad + photo + 100); }
+    }
+    g.restore();
+    // tape holding the photo
+    const tape = MASK_TAPES[t.tape] || MASK_TAPES[1];
+    drawStrip(g, px + 40, py + 12, 170, 50, -0.65, tape, I.seed + 3);
+    drawStrip(g, px + PW - 40, py + 12, 170, 50, 0.65, tape, I.seed + 5);
+    // the line, under the photo
+    drawLaid(g, m, { x: M, y: top + Math.max(0, bottom - top - m.total) * 0.4, w: maxW, align: 'center', color: t.fg, subColor: t.sub, font });
+    g.fillStyle = t.sub; g.font = `24px ${I.ui}`;
+    const foot = [I.title, I.show.page && I.page ? `p. ${I.page}` : ''].filter(Boolean).join('  ·  ');
+    if (foot) g.fillText(fitText(g, foot, maxW), M, H - 72);
+    if (I.show.fox && img) foxStamp(g, W - M + 20, H - 82, 26);
+}
+
+function cardMemo(g, W, H, I, t, A) {
+    g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
+    const r = seeded(I.seed);
+    // faint desk grain
+    g.fillStyle = t.darkBg ? 'rgba(255,255,255,.018)' : 'rgba(0,0,0,.018)';
+    for (let k = 0; k < 14; k++) g.fillRect(0, r() * H, W, 2 + r() * 6);
+    const NW = W - 220, NH = Math.round(Math.min(H - 330, NW * 1.12));
+    const nx = (W - NW) / 2, ny = (H - NH) / 2 - 20;
+    const ang = 0.022 + (r() - 0.5) * 0.02;
+    g.save();
+    g.translate(nx + NW / 2, ny + NH / 2); g.rotate(ang); g.translate(-NW / 2, -NH / 2);
+    // shadow lifts at the bottom corners, like a note that curls a little
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,.28)'; g.shadowBlur = 36; g.shadowOffsetY = 22;
+    g.beginPath(); g.moveTo(14, 40); g.lineTo(NW - 14, 40); g.lineTo(NW - 24, NH - 8); g.quadraticCurveTo(NW / 2, NH - 30, 24, NH - 8); g.closePath();
+    g.fillStyle = 'rgba(0,0,0,.2)'; g.fill();
+    g.restore();
+    const fold = 70;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(NW, 0); g.lineTo(NW, NH - fold); g.lineTo(NW - fold, NH); g.lineTo(0, NH); g.closePath();
+    g.fillStyle = t.note; g.fill();
+    const sh = g.createLinearGradient(0, 0, 0, NH);
+    sh.addColorStop(0, 'rgba(0,0,0,.05)'); sh.addColorStop(0.12, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(255,255,255,.12)');
+    g.fillStyle = sh; g.fill();
+    g.beginPath(); g.moveTo(NW, NH - fold); g.lineTo(NW - fold, NH); g.lineTo(NW - fold + 8, NH - fold + 8); g.closePath();
+    g.fillStyle = t.fold; g.fill();
+    // writing
+    const IN = 74, maxW = NW - IN * 2;
+    g.textBaseline = 'alphabetic';
+    let hy = 112;
+    if (I.show.chapter && I.chapter) { g.fillStyle = t.sub; g.font = `600 26px ${I.ui}`; g.fillText(fitText(g, I.chapter, maxW), IN, hy); hy += 26; }
+    const whoH = I.show.who && I.who ? 70 : 0;
+    const top = hy + 40, bottom = NH - 70 - whoH;
+    const font = (fs, small) => `${small ? 400 : 500} ${fs}px ${I.read}`;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 58, min: 22, lh: 1.62, subScale: 0.72, gap: 40 });
+    const y = drawLaid(g, m, { x: IN, y: top + Math.max(0, bottom - top - m.total) * 0.35, w: maxW, color: t.fg, subColor: t.sub, font,
+        divider: (dy) => { g.fillStyle = t.sub; g.globalAlpha = 0.4; g.fillRect(IN, dy - 1, 44, 3); g.globalAlpha = 1; } });
+    if (whoH) { g.fillStyle = t.fg; g.font = `600 32px ${I.read}`; const s = `— ${I.who}`; g.fillText(fitText(g, s, maxW), NW - IN - Math.min(maxW, g.measureText(s).width), Math.min(NH - 60, y + 58)); }
+    g.restore();
+    drawStrip(g, nx + NW / 2, ny + 6, 230, 62, -0.05 + (r() - 0.5) * 0.06, MASK_TAPES[t.tape] || MASK_TAPES[0], I.seed + 9);
+    const outC = t.darkBg ? 'rgba(255,255,255,.55)' : 'rgba(0,0,0,.45)';
+    g.fillStyle = outC; g.font = `24px ${I.ui}`;
+    const foot = [I.title, I.show.page && I.page ? `p. ${I.page}` : ''].filter(Boolean).join('  ·  ');
+    if (foot) g.fillText(fitText(g, foot, W - 300), 110, H - 70);
+    if (I.show.fox) foxStamp(g, W - 130, H - 80, 28);
 }
 
 function cardSubtitle(g, W, H, I, t, A) {
@@ -1915,62 +2381,85 @@ function cardSubtitle(g, W, H, I, t, A) {
     g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     const img = I.show.avatar ? (A.full || A.thumb) : null;
     if (img) { g.save(); g.beginPath(); g.rect(0, bar, W, H - bar * 2); g.clip(); coverImage(g, img, 0, bar, W, H - bar * 2); g.restore(); }
-    else { const rg = g.createRadialGradient(W * 0.5, H * 0.35, 40, W * 0.5, H * 0.45, H * 0.75); rg.addColorStop(0, `rgba(${t.veil},.2)`); rg.addColorStop(0, '#3a3f4a'); rg.addColorStop(1, `rgb(${t.veil})`); g.fillStyle = rg; g.fillRect(0, bar, W, H - bar * 2); }
+    else { const rg = g.createRadialGradient(W * 0.5, H * 0.35, 40, W * 0.5, H * 0.45, H * 0.75); rg.addColorStop(0, '#3a3f4a'); rg.addColorStop(1, `rgb(${t.veil})`); g.fillStyle = rg; g.fillRect(0, bar, W, H - bar * 2); }
     const vg = g.createLinearGradient(0, bar, 0, H - bar);
-    vg.addColorStop(0, `rgba(${t.veil},.18)`); vg.addColorStop(0.45, `rgba(${t.veil},.3)`); vg.addColorStop(1, `rgba(${t.veil},.9)`);
+    vg.addColorStop(0, `rgba(${t.veil},.15)`); vg.addColorStop(0.42, `rgba(${t.veil},.28)`); vg.addColorStop(1, `rgba(${t.veil},.92)`);
     g.fillStyle = vg; g.fillRect(0, bar, W, H - bar * 2);
     g.fillStyle = '#000'; g.fillRect(0, 0, W, bar); g.fillRect(0, H - bar, W, bar);
     const ui = I.ui;
     g.textBaseline = 'alphabetic';
-    if (I.show.chapter && I.chapter) { g.fillStyle = '#9a9a9a'; g.font = `24px ${ui}`; g.fillText(fitText(g, I.chapter, W - 260), 64, bar * 0.62); }
+    const headL = [I.title, I.show.chapter && I.chapter].filter(Boolean).join('  ·  ');
+    if (headL) { g.fillStyle = '#a8a8a8'; g.font = `24px ${ui}`; g.fillText(fitText(g, headL, W - 260), 64, bar * 0.62); }
     if (I.show.fox) foxStamp(g, W - 70, bar * 0.5, bar * 0.3);
     const maxW = W - 180;
     const font = (fs, small) => `${small ? 500 : 600} ${fs}px ${ui}`;
-    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: H * 0.4, max: 50, min: 24, lh: 1.5, subScale: 0.74, gap: 26 });
-    let y = H - bar - 96 - m.total;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: H * 0.42, max: 56, min: 26, lh: 1.5, subScale: 0.72, gap: 26 });
+    const y = H - bar - 100 - m.total;
     g.save();
-    g.shadowColor = 'rgba(0,0,0,.7)'; g.shadowBlur = 14; g.shadowOffsetY = 2;
-    if (I.show.who && I.who) { g.fillStyle = t.sub; g.font = `500 28px ${ui}`; const s = fitText(g, I.who, maxW); g.fillText(s, (W - g.measureText(s).width) / 2, y - 30); }
+    g.shadowColor = 'rgba(0,0,0,.75)'; g.shadowBlur = 16; g.shadowOffsetY = 2;
+    if (I.show.who && I.who) {
+        g.font = `600 28px ${ui}`;
+        const s = fitText(g, I.who, maxW), sw = g.measureText(s).width;
+        g.fillStyle = t.tr; g.fillRect((W - 36) / 2, y - 76, 36, 3);
+        g.fillStyle = t.sub; g.fillText(s, (W - sw) / 2, y - 30);
+    }
     drawLaid(g, m, { x: 90, y, w: maxW, align: 'center', color: t.fg, subColor: t.tr, font });
     g.restore();
 }
 
+/** Like a messenger screen: top bar, the speaker's messages, the input bar at the bottom. */
 function cardChat(g, W, H, I, t, A) {
     g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
-    const M = 72, ui = I.ui, d = 112, pad = 34;
-    const bx = M + d + 26, bubbleMax = W - bx - M - 40;
+    const ui = I.ui;
+    g.textBaseline = 'alphabetic';
+    // top bar
+    const TB = 132;
+    g.fillStyle = t.bar; g.fillRect(0, 0, W, TB);
+    g.strokeStyle = t.sub; g.lineWidth = 5; g.lineCap = 'round'; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(74, TB / 2 - 22); g.lineTo(52, TB / 2); g.lineTo(74, TB / 2 + 22); g.stroke();
+    const headName = (I.show.who && I.who) || I.title || '대화';
+    let hx = 108;
+    if (I.show.avatar && A.thumb) { g.save(); g.beginPath(); g.arc(hx + 34, TB / 2, 34, 0, Math.PI * 2); g.clip(); coverImage(g, A.thumb, hx, TB / 2 - 34, 68, 68); g.restore(); hx += 86; }
+    g.fillStyle = t.fg; g.font = `700 34px ${ui}`; g.fillText(fitText(g, headName, W - hx - 140), hx, TB / 2 + (I.title && headName !== I.title ? -2 : 12));
+    if (I.title && headName !== I.title) { g.fillStyle = t.sub; g.font = `22px ${ui}`; g.fillText(fitText(g, I.title, W - hx - 140), hx, TB / 2 + 32); }
+    for (let k = 0; k < 3; k++) { g.fillStyle = t.sub; g.beginPath(); g.arc(W - 64, TB / 2 - 16 + k * 16, 4, 0, Math.PI * 2); g.fill(); }
+    // input bar
+    const IB = 120;
+    g.fillStyle = t.bar; g.fillRect(0, H - IB, W, IB);
+    g.fillStyle = t.dark ? '#2a2f36' : '#ffffff'; roundPath(g, 40, H - IB + 26, W - 170, IB - 52, (IB - 52) / 2); g.fill();
+    g.fillStyle = t.sub; g.font = `26px ${ui}`; g.fillText('메시지 입력', 78, H - IB / 2 + 9);
+    g.fillStyle = t.me; g.beginPath(); g.arc(W - 74, H - IB / 2, 34, 0, Math.PI * 2); g.fill();
+    g.fillStyle = t.dark ? '#fff' : '#3a3200'; g.beginPath(); g.moveTo(W - 86, H - IB / 2 - 14); g.lineTo(W - 58, H - IB / 2); g.lineTo(W - 86, H - IB / 2 + 14); g.closePath(); g.fill();
+    // messages
+    const M = 56, d = 96, pad = 34;
+    const showAv = I.show.avatar && A.thumb;
+    const bx = M + (showAv ? d + 22 : 0), bubbleMax = W - bx - M - 110;
     const font = (fs) => `${fs}px ${I.read}`;
-    const pillH = I.show.chapter && I.chapter ? 56 : 0;
-    const nameH = I.show.who && I.who ? 50 : 0;
-    const avail = H - M * 2 - pillH - 70 - nameH - pad * 2 * (I.trans ? 2 : 1) - (I.trans ? 22 : 0) - 60;
-    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW: bubbleMax - pad * 2, avail, max: 44, min: 22, lh: 1.6, subScale: 0.86, gap: 0 });
+    const pillH = I.show.chapter && I.chapter ? 52 : 0;
+    const areaTop = TB + 50, areaBottom = H - IB - 50;
+    const avail = areaBottom - areaTop - (pillH ? pillH + 44 : 0) - pad * 2 * (I.trans ? 2 : 1) - (I.trans ? 18 : 0) - 20;
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW: bubbleMax - pad * 2, avail, max: 50, min: 22, lh: 1.55, subScale: 0.86, gap: 0 });
     const sizes = m.laid.map(b => {
         g.font = font(b.fs);
         const w = Math.max(...b.lines.map(l => (l ? g.measureText(l).width : 0)), 40);
         return { w: Math.min(bubbleMax, w + pad * 2), h: b.h + pad * 2 - (b.lh - b.fs * 1.25) };
     });
-    const groupH = nameH + sizes.reduce((a, s) => a + s.h, 0) + (sizes.length - 1) * 18;
-    const total = (pillH ? pillH + 64 : 0) + Math.max(d, groupH);
-    let y = Math.max(M, (H - total) / 2);
-    g.textBaseline = 'alphabetic';
+    const groupH = sizes.reduce((a, s) => a + s.h, 0) + (sizes.length - 1) * 16;
+    const total = (pillH ? pillH + 44 : 0) + Math.max(showAv ? d : 0, groupH);
+    let y = areaTop + Math.max(0, (areaBottom - areaTop - total) / 2);
     if (pillH) {
         g.font = `500 24px ${ui}`;
         const s = fitText(g, I.chapter, W - M * 2 - 60), pw = g.measureText(s).width + 48;
         g.fillStyle = t.pill; roundPath(g, (W - pw) / 2, y, pw, pillH, pillH / 2); g.fill();
         g.fillStyle = t.sub; g.fillText(s, (W - pw) / 2 + 24, y + pillH / 2 + 9);
-        y += pillH + 64;
+        y += pillH + 44;
     }
-    // avatar
-    g.save(); g.beginPath(); g.arc(M + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); g.clip();
-    if (I.show.avatar && A.thumb) coverImage(g, A.thumb, M, y, d, d);
-    else { g.fillStyle = t.dark ? '#3a4048' : '#ffffff'; g.fillRect(M, y, d, d); if (I.who) { g.fillStyle = t.sub; g.font = `700 44px ${ui}`; const c = [...I.who][0]; g.fillText(c, M + (d - g.measureText(c).width) / 2, y + d / 2 + 16); } }
-    g.restore();
-    if (nameH) { g.fillStyle = t.fg; g.font = `600 30px ${ui}`; g.fillText(fitText(g, I.who, bubbleMax), bx, y + 30); }
-    let by = y + nameH;
+    if (showAv) { g.save(); g.beginPath(); g.arc(M + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); g.clip(); coverImage(g, A.thumb, M, y, d, d); g.restore(); }
+    let by = y;
     m.laid.forEach((b, k) => {
         const s = sizes[k];
         g.fillStyle = k === 0 ? t.bubble : t.tr;
-        roundPath(g, bx, by, s.w, s.h, k === 0 ? [8, 36, 36, 36] : 36); g.fill();
+        roundPath(g, bx, by, s.w, s.h, k === 0 ? [8, 34, 34, 34] : 34); g.fill();
         drawLaid(g, { ...m, laid: [b], gap: 0 }, { x: bx + pad, y: by + pad - (b.lh - b.fs * 1.25) / 2, w: s.w - pad * 2, color: t.fg, subColor: t.sub, font });
         if (k === m.laid.length - 1 && I.time) {
             g.fillStyle = t.sub; g.font = `22px ${ui}`;
@@ -1978,30 +2467,31 @@ function cardChat(g, W, H, I, t, A) {
             if (bx + s.w + 14 + tw < W - 20) g.fillText(I.time, bx + s.w + 14, by + s.h - 6);
             else g.fillText(I.time, bx + s.w - tw, by + s.h + 34);
         }
-        by += s.h + 18;
+        by += s.h + 16;
     });
-    if (I.show.fox) foxStamp(g, W - M, H - M, 28);
+    if (I.show.fox) foxStamp(g, W - 70, H - IB - 50, 24);
 }
 
 function cardPoster(g, W, H, I, t, A) {
     g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
     const M = 100, ui = I.ui, maxW = W - M * 2;
     quoteMark(g, M, M, 120, t.mark);
-    const footH = (I.show.who && I.who ? 46 : 0) + (I.show.chapter && I.chapter ? 40 : 0);
+    if (I.title) { g.fillStyle = t.sub; g.font = `600 24px ${ui}`; const s = fitText(g, I.title, maxW - 260); g.fillText(s, W - M - g.measureText(s).width, M + 40); }
+    const footH = (I.show.who && I.who ? 50 : 0) + (I.show.chapter && I.chapter ? 40 : 0);
     const top = M + 190, bottom = H - M - footH - 70;
     const font = (fs, small) => `${small ? 500 : 800} ${fs}px ${ui}`;
-    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 92, min: 34, lh: 1.32, subScale: 0.46, gap: 48 });
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: bottom - top, max: 96, min: 34, lh: 1.3, subScale: 0.44, gap: 48 });
     g.textBaseline = 'alphabetic';
     const y = top + Math.max(0, bottom - top - m.total) * 0.45;
     drawLaid(g, m, { x: M, y, w: maxW, color: t.fg, subColor: t.sub, font,
         divider: (dy) => { g.fillStyle = t.mark; g.fillRect(M, dy - 2, 64, 5); } });
     let fy = H - M;
     if (I.show.chapter && I.chapter) { g.fillStyle = t.sub; g.font = `28px ${ui}`; g.fillText(fitText(g, I.chapter, maxW - 140), M, fy); fy -= 46; }
-    if (I.show.who && I.who) { g.fillStyle = t.fg; g.font = `700 36px ${ui}`; g.fillText(fitText(g, I.who, maxW - 140), M, fy); }
+    if (I.show.who && I.who) { g.fillStyle = t.fg; g.font = `700 38px ${ui}`; g.fillText(fitText(g, I.who, maxW - 140), M, fy); }
     if (I.show.fox) foxStamp(g, W - M - 44, H - M - 30, 46, t.mark);
 }
 
-const CARD_DRAW = { underline: cardUnderline, page: cardPage, subtitle: cardSubtitle, chat: cardChat, poster: cardPoster };
+const CARD_DRAW = { underline: cardUnderline, page: cardPage, minimal: cardMinimal, letter: cardLetter, polaroid: cardPolaroid, memo: cardMemo, subtitle: cardSubtitle, chat: cardChat, poster: cardPoster };
 
 /** Draw a card. info: text, trans, transFirst, who, chapter, title, page, time, hl, show, commu, seed; assets: thumb/full images. */
 function drawCard(canvas, info, layoutKey = 'underline', tintIdx = 0, ratio = '4:5', assets = {}) {
@@ -2009,11 +2499,14 @@ function drawCard(canvas, info, layoutKey = 'underline', tintIdx = 0, ratio = '4
     const t = L.tints[tintIdx] || L.tints[0];
     canvas.width = 1080;
     canvas.height = CARD_RATIOS[ratio] || 1350;
-    if (t.commu) return drawCommunity(canvas, info, t);
     const g = canvas.getContext('2d');
+    armMasks(g);
+    const show = { who: true, chapter: true, avatar: true, page: true, fox: true, title: true, ...(info.show || {}) };
+    if (t.commu) return drawCommunity(canvas, { ...info, who: show.who ? info.who : '', chapter: show.chapter ? info.chapter : '' }, t);
     const f = pageFonts();
     const I = { ...info, ui: `${f.uiFont}, sans-serif`, read: `${f.readFont}, sans-serif` };
-    I.show = { who: true, chapter: true, avatar: true, page: true, fox: true, ...(info.show || {}) };
+    I.show = show;
+    if (!show.title) I.title = '';
     (CARD_DRAW[layoutKey] || cardUnderline)(g, canvas.width, canvas.height, I, t, assets);
     if (info.series) drawSeriesMark(g, canvas.width, canvas.height, layoutKey, t, info.series.k, info.series.n);
 }
@@ -2072,12 +2565,12 @@ function cardLayoutOf(s) {
         s.cardTints = { ...(s.cardTints || {}), [s.cardLayout]: old ? old[1] : 0 };
     }
     s.cardTints = { ...(s.cardTints || {}) };
-    s.cardShow = { who: true, chapter: true, avatar: true, page: true, fox: s.cardFox !== false, ...(s.cardShow || {}) };
+    s.cardShow = { who: true, chapter: true, avatar: true, page: true, fox: s.cardFox !== false, title: true, ...(s.cardShow || {}) };
     if (!CARD_RATIOS[s.cardRatio]) s.cardRatio = '4:5';
     return s.cardLayout;
 }
 
-const CARD_SHOW = [['who', '화자'], ['chapter', '챕터'], ['avatar', '프로필 사진'], ['page', '쪽수'], ['fox', '여우 도장']];
+const CARD_SHOW = [['who', '화자 이름'], ['title', '캐릭터 이름(제목)'], ['chapter', '챕터'], ['avatar', '프로필 사진'], ['page', '쪽수'], ['fox', '여우 도장']];
 const RATIO_NAMES = { '4:5': '4:5 피드', '1:1': '1:1 정사각', '9:16': '9:16 스토리' };
 
 function openCard({ text, trans = '', mesId, who, note = null }) {
@@ -2155,6 +2648,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
                         <label><span>챕터 · 출처</span><input id="stbs-card-ch" class="text_pole" value="${esc(chapter0)}"></label>
                     </div>
                 </section>
+                ${maskSectionHtml()}
             </div>
             <div class="stbs-cx-foot">
                 <div class="stbs-btn" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
@@ -2170,7 +2664,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
     const chIn = body.querySelector('#stbs-card-ch');
     let seed = parseInt(hash(String(text || '')).slice(0, 6), 36) || 7;
     const fillCommu = () => {
-        const dflt = commuDefaults(seed, whoIn.value.trim());
+        const dflt = commuDefaults(seed, s.cardShow.who ? whoIn.value.trim() : '');
         cTitle.value = dflt.title;
         cCm.value = dflt.comments.join('\n');
     };
@@ -2280,6 +2774,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
             }
         }, 'image/png');
     });
+    bindMaskSection(body, () => { redraw(); thumbsSoon(); });
     fillCommu();
     renderTints();
     redraw();
@@ -3300,9 +3795,12 @@ function drawSeriesMark(g, W, H, layout, t, k, n) {
     g.textBaseline = 'middle';
     const w = g.measureText(s).width + 30, h = 42;
     let x = W - 64 - w, y = 64;
-    if (layout === 'page') { x = 110; y = H - 92 - h / 2 - 8; }
+    if (layout === 'page') { x = 120; y = H - 96 - h / 2 - 8; }
+    if (layout === 'letter') { x = W - 64 - 74 - w; y = H - 64 - 44 - h + 12; }
+    if (layout === 'minimal') { x = W - 46 - 40 - w; y = 46 + 40; }
+    if (layout === 'chat') { x = W - 110 - w; y = 132 / 2 - h / 2; }
     if (layout === 'subtitle') { x = W - 120 - w; y = Math.round(H * 0.075) / 2 - h / 2; }
-    const dark = t.dark || layout === 'subtitle' || ['#26332a', '#1b2140', '#161616'].includes(t.bg);
+    const dark = t.dark || t.darkBg || layout === 'subtitle';
     g.fillStyle = dark ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.07)';
     roundPath(g, x, y, w, h, h / 2); g.fill();
     g.fillStyle = layout === 'subtitle' ? '#d0d0d0' : (t.sub || '#888');
@@ -3360,6 +3858,7 @@ function openCardSeries(notes, name = '') {
                     <ol class="stbs-series-list">${items.map((it, k) => `<li data-goto="${k}" class="${k === 0 ? 'on' : ''}"><span>${esc(clip(it.info.text.replace(/\s+/g, ' '), 46))}</span></li>`).join('')}</ol>
                     <div class="stbs-hint">문장을 고치려면 카드를 한 장씩 만들어 주세요. 여기서는 디자인만 맞춰요.</div>
                 </section>
+                ${maskSectionHtml()}
             </div>
             <div class="stbs-cx-foot">
                 ${navigator.canShare ? '<div class="stbs-btn" id="stbs-series-share"><i class="fa-solid fa-share-nodes"></i> 공유</div>' : ''}
@@ -3432,6 +3931,7 @@ function openCardSeries(notes, name = '') {
             if (err?.name !== 'AbortError') toastr.warning('이 브라우저에서는 여러 장 공유가 안 돼요. 모두 저장을 써 주세요.');
         }
     });
+    bindMaskSection(body, () => { redraw(); drawThumbs(); });
     renderTints();
     redraw();
     Promise.all([loadFoxImage(), document.fonts?.ready?.catch?.(() => { }), ...items.map(it => cardAssets(it.n.mesId).then(a => { it.assets = a; }))])
@@ -3464,6 +3964,7 @@ function drawSummary(canvas, S, tintIdx = 0, ratio = '4:5', A = {}) {
     const t = SUMMARY_TINTS[tintIdx] || SUMMARY_TINTS[0];
     const W = canvas.width = 1080, H = canvas.height = CARD_RATIOS[ratio] || 1350;
     const g = canvas.getContext('2d');
+    armMasks(g);
     const f = pageFonts(), ui = `${f.uiFont}, sans-serif`, read = `${f.readFont}, sans-serif`;
     const M = 92, maxW = W - M * 2;
     g.fillStyle = t.bg; g.fillRect(0, 0, W, H);
@@ -3476,7 +3977,7 @@ function drawSummary(canvas, S, tintIdx = 0, ratio = '4:5', A = {}) {
         g.save(); g.beginPath(); g.arc(M + 36, y + 36, 36, 0, Math.PI * 2); g.clip(); coverImage(g, A.thumb, M, y, 72, 72); g.restore();
     }
     const hx = showAv ? M + 92 : M;
-    g.fillStyle = t.fg; g.font = `700 32px ${ui}`; g.fillText(fitText(g, S.title || '', W - hx - M), hx, y + 32);
+    g.fillStyle = t.fg; g.font = `700 32px ${ui}`; if (S.show.title !== false) g.fillText(fitText(g, S.title || '', W - hx - M), hx, y + 32);
     g.fillStyle = t.sub; g.font = `26px ${ui}`; g.fillText(fitText(g, S.kicker, W - hx - M), hx, y + 68);
     y += 72 + 70;
 
@@ -3515,7 +4016,7 @@ function drawSummary(canvas, S, tintIdx = 0, ratio = '4:5', A = {}) {
                 g.fillStyle = t.box; roundPath(g, M, y, maxW, box, 20); g.fill();
                 g.fillStyle = q.color || t.accent; roundPath(g, M, y + 18, 7, box - 36, 4); g.fill();
                 drawLaid(g, m, { x: M + 36, y: y + PADV, w: inner, color: t.fg, subColor: t.sub, font });
-                g.fillStyle = t.sub; g.font = `22px ${ui}`; g.fillText(fitText(g, q.who || '', inner), M + 36, y + box - PADV + 2);
+                g.fillStyle = t.sub; g.font = `22px ${ui}`; if (S.show.who !== false) g.fillText(fitText(g, q.who || '', inner), M + 36, y + box - PADV + 2);
                 y += box + 18;
             });
         }
@@ -3582,7 +4083,7 @@ function chapterRange(id) {
 function openSummaryCard(kind, chapterId = null) {
     const s = settings();
     s.summaryTint ??= 0;
-    const show = { avatar: s.cardShow?.avatar !== false, fox: s.cardFox !== false };
+    const show = { avatar: s.cardShow?.avatar !== false, fox: s.cardFox !== false, title: s.cardShow?.title !== false, who: s.cardShow?.who !== false };
     const c = ctx();
     const title = c.groupId ? (c.groups?.find?.(x => x.id === c.groupId)?.name || '') : (c.name2 || '');
     const cpp = Math.max(100, Number(s.charsPerPage) || 600);
@@ -3613,7 +4114,7 @@ function openSummaryCard(kind, chapterId = null) {
                 <section class="stbs-cx-sec">
                     <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints">${SUMMARY_TINTS.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === s.summaryTint ? 'active' : ''}" data-tint="${k}"><span style="background:${t.bg}"><i style="background:${t.accent}"></i></span>${t.name}</button>`).join('')}</div></div>
                     <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
-                    <div class="stbs-cx-checks">${[['avatar', '프로필 사진'], ['fox', '여우 도장']].map(([k, n]) => `<button type="button" class="stbs-cx-check ${show[k] ? 'on' : ''}" data-show="${k}"><i class="fa-solid fa-check"></i>${n}</button>`).join('')}</div>
+                    <div class="stbs-cx-checks">${[['title', '캐릭터 이름'], ...(kind === 'chapter' ? [['who', '화자 이름']] : []), ['avatar', '프로필 사진'], ['fox', '여우 도장']].map(([k, n]) => `<button type="button" class="stbs-cx-check ${show[k] ? 'on' : ''}" data-show="${k}"><i class="fa-solid fa-check"></i>${n}</button>`).join('')}</div>
                 </section>
                 ${kind === 'chapter' ? `<section class="stbs-cx-sec">
                     <div class="stbs-cx-h">카드에 넣을 문장 <span class="stbs-dim">3개까지</span></div>
@@ -3621,6 +4122,7 @@ function openSummaryCard(kind, chapterId = null) {
                         : '<div class="stbs-hint">이 장에 칠한 문장이 없어요. 형광펜을 칠하면 여기에 골라 넣을 수 있어요.</div>'}
                     <div class="stbs-hint">별점과 한줄평은 목차의 <i class="fa-regular fa-star"></i> 버튼으로 바꿔요.</div>
                 </section>` : `<section class="stbs-cx-sec"><div class="stbs-hint">숫자는 통계 탭과 같아요. 별점과 한줄평은 "이 책의 별점"에서 바꿔요.</div></section>`}
+                ${maskSectionHtml()}
             </div>
             <div class="stbs-cx-foot">
                 <div class="stbs-btn" id="stbs-card-copy"><i class="fa-solid fa-copy"></i> 이미지 복사</div>
@@ -3640,7 +4142,7 @@ function openSummaryCard(kind, chapterId = null) {
         const ra = e.target.closest('[data-ratio]');
         if (ra) { s.cardRatio = ra.dataset.ratio; saveSettings(); body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra)); redraw(); return; }
         const sh = e.target.closest('[data-show]');
-        if (sh) { const k = sh.dataset.show; show[k] = !show[k]; sh.classList.toggle('on', show[k]); redraw(); return; }
+        if (sh) { const k = sh.dataset.show; show[k] = !show[k]; sh.classList.toggle('on', show[k]); if (s.cardShow && (k === 'title' || k === 'who')) { s.cardShow[k] = show[k]; saveSettings(); } redraw(); return; }
         const pl = e.target.closest('[data-pickline]');
         if (pl) {
             const id = pl.dataset.pickline;
@@ -3657,6 +4159,7 @@ function openSummaryCard(kind, chapterId = null) {
         try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]); toastr.success('이미지를 복사했어요.'); }
         catch { toastr.warning('이 브라우저에서는 이미지 복사가 안 돼요. PNG로 저장을 써 주세요.'); }
     }, 'image/png'));
+    bindMaskSection(body, redraw);
     redraw();
     const lastChar = [...(c.chat || [])].map((m, i) => [m, i]).reverse().find(([m]) => m && !m.is_user && !m.is_system)?.[1] ?? 0;
     Promise.all([loadFoxImage(), document.fonts?.ready?.catch?.(() => { }), cardAssets(lastChar).then(a => Object.assign(A, a))])

@@ -1182,7 +1182,7 @@ details.stbs-cx-fold[open] > summary::after { transform: rotate(45deg); }
 details.stbs-cx-fold:not([open]) { gap: 0; }
 
 /* design tiles: live thumbnails of the text in each design */
-.stbs-cx-lays { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.stbs-cx-lays { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .stbs-cx-lay {
     all: unset; box-sizing: border-box; cursor: pointer;
     display: flex; flex-direction: column; align-items: center; gap: 6px;
@@ -1253,7 +1253,7 @@ details.stbs-cx-fold:not([open]) { gap: 0; }
     }
     .stbs-cx-view #stbs-card-canvas { max-height: 34dvh; border-radius: 8px; }
     .stbs-cx-side { padding: 0 16px 8px; }
-    .stbs-cx-lays { grid-template-columns: repeat(6, minmax(64px, 1fr)); overflow-x: auto; padding-bottom: 2px; }
+    .stbs-cx-lays { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
     .stbs-cx-foot { padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); }
     .stbs-cx-foot .stbs-btn { flex: 1; justify-content: center; }
 }
@@ -1363,3 +1363,11 @@ details.stbs-cx-fold:not([open]) { gap: 0; }
 .stbs-lib-rows { display: flex; flex-direction: column; gap: 8px; padding: 0 10px 10px; }
 .stbs-lib-rows .stbs-note, .stbs-lib-rows .stbs-item { box-shadow: none; }
 @media (prefers-reduced-motion: reduce) { .stbs-fold-caret, .stbs-lib-caret { transition: none; } }
+
+/* ================= v1.16 name masking ================= */
+.stbs-mask-box #stbs-card-mask { width: 100%; box-sizing: border-box; margin: 0 0 8px !important; }
+.stbs-mask-sugg { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.stbs-cx-tint[data-tape] > span { width: 32px; height: 15px; border-radius: 1px; transform: rotate(-5deg); box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+    clip-path: polygon(3% 0, 97% 0, 92% 20%, 100% 40%, 93% 60%, 100% 80%, 96% 100%, 4% 100%, 0 80%, 7% 60%, 0 40%, 8% 20%); }
+.stbs-cx-tint[data-tape] > span[data-kind="marker"] { border-radius: 8px; clip-path: none; box-shadow: none; }
+.stbs-cx-tint[data-tape] > span[data-kind="correction"] { border-radius: 3px; clip-path: none; box-shadow: inset 0 0 0 1px #d9d9d3, 0 1px 2px rgba(0, 0, 0, .2); }
