@@ -1371,3 +1371,41 @@ details.stbs-cx-fold:not([open]) { gap: 0; }
     clip-path: polygon(3% 0, 97% 0, 92% 20%, 100% 40%, 93% 60%, 100% 80%, 96% 100%, 4% 100%, 0 80%, 7% 60%, 0 40%, 8% 20%); }
 .stbs-cx-tint[data-tape] > span[data-kind="marker"] { border-radius: 8px; clip-path: none; box-shadow: none; }
 .stbs-cx-tint[data-tape] > span[data-kind="correction"] { border-radius: 3px; clip-path: none; box-shadow: inset 0 0 0 1px #d9d9d3, 0 1px 2px rgba(0, 0, 0, .2); }
+
+/* ================= v1.17.2 · card editor on phones ================= */
+.stbs-cx-mini { display: none; }
+.stbs-tape-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.stbs-tape-grid .stbs-cx-tint { justify-content: flex-start; min-width: 0; padding: 7px 10px; gap: 8px; }
+.stbs-tape-grid .stbs-cx-tint > b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.stbs-tape-grid .stbs-cx-tint > span { flex: none; }
+.stbs-mask-box .stbs-mask-sugg .stbs-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 800px) {
+    /* The preview is its own layer: iOS Safari paints text fields over a plain sticky box otherwise. */
+    .stbs-cx-view {
+        position: -webkit-sticky; position: sticky; top: 0; z-index: 20;
+        -webkit-transform: translateZ(0); transform: translateZ(0); will-change: transform; isolation: isolate;
+        background: var(--stbs-bg);
+        margin: 0 0 4px;
+        padding: 10px 16px 14px;
+        border-bottom: 1px solid var(--stbs-line);
+        box-shadow: 0 12px 16px -14px rgba(0, 0, 0, .35);
+    }
+    .stbs-cx-side { position: relative; z-index: 0; }
+    .stbs-cx-view #stbs-card-canvas { max-height: 30dvh; transition: max-height .2s ease; }
+    .stbs-cx-view.mini #stbs-card-canvas, .stbs-cx-view.kb #stbs-card-canvas { max-height: 15dvh; box-shadow: 0 6px 14px rgba(40, 20, 5, .18); }
+    .stbs-cx-mini {
+        display: grid; place-items: center; position: absolute; top: 10px; right: 12px; z-index: 2;
+        width: 34px; height: 34px; padding: 0; border-radius: 50%;
+        border: 1px solid var(--stbs-line2); background: var(--stbs-surface); color: var(--stbs-fg2);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, .12); cursor: pointer; font-size: 14px;
+    }
+    .stbs-cx-view.kb .stbs-cx-mini { display: none; }
+    .stbs-cx-series .stbs-series-nav { margin-top: 2px; }
+    .stbs-cx-view.mini.stbs-cx-series .stbs-series-nav, .stbs-cx-view.kb.stbs-cx-series .stbs-series-nav { transform: scale(.9); }
+    .stbs-cx-row2 { grid-template-columns: 1fr; gap: 8px; }
+    .stbs-tape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 800px) and (prefers-reduced-motion: reduce) {
+    .stbs-cx-view #stbs-card-canvas { transition: none; }
+}

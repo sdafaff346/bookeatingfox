@@ -38,7 +38,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
-const VERSION = '1.17.1';
+const VERSION = '1.17.2';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -1282,7 +1282,41 @@ function openModal(title, bodyHtml, { wide = false } = {}) {
     try { host.showModal(); } catch { host.setAttribute('open', ''); }
     const tc = $id('toast-container');
     if (tc) host.appendChild(tc);
-    return wrap.querySelector('.stbs-modal-body');
+    const body = wrap.querySelector('.stbs-modal-body');
+    enhanceCardView(body);
+    return body;
+}
+
+/**
+ * Card editors on a phone: the preview stays on top while you scroll, can be made small with one tap,
+ * and shrinks by itself while the keyboard is up so the field you type in stays in sight.
+ */
+function enhanceCardView(body) {
+    const v = body?.querySelector('.stbs-cx-view');
+    if (!v) return;
+    const s = settings();
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'stbs-cx-mini';
+    const paint = () => {
+        const mini = v.classList.contains('mini');
+        btn.innerHTML = `<i class="fa-solid ${mini ? 'fa-up-right-and-down-left-from-center' : 'fa-down-left-and-up-right-to-center'}"></i>`;
+        btn.title = mini ? '미리보기 크게' : '미리보기 작게';
+        btn.setAttribute('aria-label', btn.title);
+    };
+    if (s.cardMini) v.classList.add('mini');
+    paint();
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        v.classList.toggle('mini');
+        s.cardMini = v.classList.contains('mini');
+        saveSettings();
+        paint();
+    });
+    v.appendChild(btn);
+    const typing = (el) => el?.matches?.('textarea, input:not([type]), input[type="text"], input[type="search"]');
+    body.addEventListener('focusin', (e) => { if (isMobile() && typing(e.target)) v.classList.add('kb'); });
+    body.addEventListener('focusout', () => setTimeout(() => { if (!typing(document.activeElement) || !body.contains(document.activeElement)) v.classList.remove('kb'); }, 60));
 }
 
 function closeModal() {
@@ -1940,10 +1974,10 @@ function maskSectionHtml() {
     const names = [...new Set([c.name2, c.name1].filter(Boolean))].filter(n => !maskWords().includes(n));
     return `<section class="stbs-cx-sec stbs-mask-box">
         <div class="stbs-cx-h">이름 가리기 <span class="stbs-dim">테이프</span></div>
-        <input id="stbs-card-mask" class="text_pole" placeholder="가릴 단어 (쉼표로 여러 개) 예: 패트릭, 엘리" value="${esc(s.cardMasks || '')}">
+        <input id="stbs-card-mask" class="text_pole" placeholder="가릴 이름 (쉼표로 여러 개)" value="${esc(s.cardMasks || '')}">
         ${names.length ? `<div class="stbs-mask-sugg">${names.map(n => `<button type="button" class="stbs-chip" data-mask-add="${esc(n)}"><i class="fa-solid fa-plus"></i> ${esc(n)}</button>`).join('')}</div>` : ''}
-        <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints">${MASK_TAPES.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === (s.cardMaskTape || 0) ? 'active' : ''}" data-tape="${k}"><span class="stbs-tape-sw" style="background:${tapeSwatch(t)}" data-kind="${t.kind}"></span>${t.name}</button>`).join('')}</div></div>
-        <div class="stbs-hint">카드에 그려지는 글자 중 이 단어만 테이프로 가려요. "패트릭은 심심했다" → 패트릭만 가려지고 "은 심심했다"는 그대로예요. 모든 카드에 똑같이 적용돼요.</div>
+        <div class="stbs-tape-grid">${MASK_TAPES.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === (s.cardMaskTape || 0) ? 'active' : ''}" data-tape="${k}"><span class="stbs-tape-sw" style="background:${tapeSwatch(t)}" data-kind="${t.kind}"></span><b>${t.name}</b></button>`).join('')}</div>
+        <div class="stbs-hint">적은 단어만 테이프로 덮고, 뒤에 붙은 은·는·이·가는 그대로 둬요. 모든 카드에 똑같이 들어가요.</div>
     </section>`;
 }
 function bindMaskSection(body, redraw) {
