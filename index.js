@@ -21,7 +21,8 @@ const DEFAULTS = Object.freeze({
     cardShow: null,
     cardFox: true,
     cardTransFirst: false,
-    cardMasks: '',        // words hidden under tape on every card (comma separated)
+    cardMasks: '',        // (before v1.18) one list for every character — now only offered as a suggestion
+    cardMasksBy: {},      // words hidden under tape, per character / group (comma separated)
     cardMaskTape: 0,      // tape colour (MASK_TAPES)
     searchHidden: 'all',
     dailyLine: true,      // today's line at the top of the panel
@@ -38,7 +39,7 @@ const DEFAULTS = Object.freeze({
 const FOX_SVG = `<svg class="stbs-fox" viewBox="0 0 64 64" aria-hidden="true"><path d="M9.8 7.2 Q10 3.8 13.2 5.3 L28.2 18.5 L11.4 28.2 Z" fill="#ec8a52"/><path d="M54.2 7.2 Q54 3.8 50.8 5.3 L35.8 18.5 L52.6 28.2 Z" fill="#ec8a52"/><path d="M13.1 11.6 Q13.2 9.4 15.1 10.4 L23.2 18.6 L14.5 23.7 Z" fill="#fbd9c6"/><path d="M50.9 11.6 Q50.8 9.4 48.9 10.4 L40.8 18.6 L49.5 23.7 Z" fill="#fbd9c6"/><path d="M6.8 29.5 C8.4 13.2 55.6 13.2 57.2 29.5 C58 38.5 49.5 45.8 35 52.4 Q32 54 29 52.4 C14.5 45.8 6 38.5 6.8 29.5 Z" fill="#ec8a52"/><path d="M8 32.2 C15.2 36.5 24.6 37.3 32 49 C39.4 37.3 48.8 36.5 56 32.2 C54.4 41.4 46.2 47.8 35 52.4 Q32 54 29 52.4 C17.8 47.8 9.6 41.4 8 32.2 Z" fill="#fff7ee"/><path d="M20 32.9 Q23.3 29 26.6 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M37.400000000000006 32.9 Q40.7 29 44 32.9" stroke="#3a2a22" stroke-width="2.45" fill="none" stroke-linecap="round"/><path d="M29.8 43.6 Q32 42.300000000000004 34.2 43.6 Q33.5 45.800000000000004 32 46.2 Q30.5 45.800000000000004 29.8 43.6 Z" fill="#3a2a22"/><g transform="translate(32 55.4) scale(0.94) translate(-32 -55) rotate(-6 32 55)"><path d="M19 50.5 Q25.5 48.5 32 51 Q38.5 48.5 45 50.5 L45 60 Q38.5 58 32 60.5 Q25.5 58 19 60 Z" fill="#8fb3a6"/><path d="M20.8 51.6 Q26 50.2 31.2 52.2 L31.2 58.6 Q26 57 20.8 58.3 Z" fill="#fffdf8"/><path d="M43.2 51.6 Q38 50.2 32.8 52.2 L32.8 58.6 Q38 57 43.2 58.3 Z" fill="#fffdf8"/></g></svg>`;
 
 const APP_NAME = '책 먹는 여우';
-const VERSION = '1.17.2';
+const VERSION = '1.18.0';
 const PANEL_THEMES = { auto: '자동 (SillyTavern 밝기에 맞춤)', night: '밤의 서재 (어둡게)', day: '아침 서재 (밝게)', st: 'SillyTavern 테마 색 그대로' };
 
 /** 'auto' → pick day/night from SillyTavern's body text brightness. */
@@ -276,6 +277,12 @@ function foldedText(src) {
     return out.length ? searchText(out.join(' ')).toLowerCase() : '';
 }
 const sigAt = (i) => hash(String(msg(i)?.mes ?? ''));
+/** Where an item sits: its message's fingerprint, plus the one before it (survives a swipe/regenerate of the message itself). */
+const anchorOf = (i) => ({ sig: sigAt(i), psig: i > 0 ? sigAt(i - 1) : '' });
+/** The swipe a highlight was made on (only for messages that have swipes). */
+const swipeOf = (i) => { const m = msg(i); return Array.isArray(m?.swipes) && m.swipes.length > 1 && Number.isInteger(m.swipe_id) ? m.swipe_id : undefined; };
+/** False while another swipe of the note's message is shown. */
+const onItsSwipe = (n) => n.swipe == null || (msg(n.mesId)?.swipe_id ?? 0) === n.swipe;
 const speaker = (i) => {
     const m = msg(i);
     if (!m) return '';
@@ -293,13 +300,29 @@ function reconcile() {
         if (!sigCache.has(i)) sigCache.set(i, sigAt(i));
         return sigCache.get(i);
     };
+    const prevSig = (j) => (j > 0 ? sig(j - 1) : '');
     for (const item of [...d.bookmarks, ...d.notes, ...d.chapters]) {
-        if (!item.sig) { item.sig = sig(item.mesId); changed = true; continue; }
-        if (item.mesId < chat.length && sig(item.mesId) === item.sig) continue;
-        for (let dist = 1; dist <= 80; dist++) {
-            const cand = [item.mesId - dist, item.mesId + dist].find(j => j >= 0 && j < chat.length && sig(j) === item.sig);
-            if (cand !== undefined) { item.mesId = cand; changed = true; break; }
+        if (!item.sig) { Object.assign(item, anchorOf(item.mesId)); changed = true; continue; }
+        if (item.mesId < chat.length && sig(item.mesId) === item.sig) {
+            const ps = prevSig(item.mesId);
+            if (item.psig !== ps) { item.psig = ps; changed = true; }
+            continue;
         }
+        let moved = false;
+        for (let dist = 1; dist <= 80 && !moved; dist++) {
+            const cand = [item.mesId - dist, item.mesId + dist].find(j => j >= 0 && j < chat.length && sig(j) === item.sig);
+            if (cand !== undefined) { item.mesId = cand; moved = true; }
+        }
+        // The message itself changed (swipe, regenerate, edit we didn't see): find it by the message before it.
+        if (!moved && item.psig) {
+            const here = item.mesId < chat.length && prevSig(item.mesId) === item.psig;
+            for (let dist = 0; dist <= 80 && !moved && !here; dist++) {
+                const cand = [item.mesId - dist, item.mesId + dist].find(j => j > 0 && j < chat.length && prevSig(j) === item.psig);
+                if (cand !== undefined) { item.mesId = cand; moved = true; }
+            }
+            if (moved || here) { item.sig = sig(item.mesId); moved = true; }
+        }
+        if (moved) changed = true;
         if (item.mesId >= chat.length) { item.mesId = Math.max(0, chat.length - 1); changed = true; }
     }
     if (changed) persist();
@@ -458,7 +481,7 @@ function decorateMessage(i) {
     unwrapMarks(textEl);
     if (!on) return;
 
-    const notes = data().notes.filter(n => n.mesId === i && n.start != null);
+    const notes = data().notes.filter(n => n.mesId === i && n.start != null && onItsSwipe(n));
     if (!notes.length) return;
     const text = textEl.textContent;
     let dirty = false;
@@ -847,6 +870,8 @@ function isFar(i) {
 }
 
 async function jumpTo(i, noteId = null, query = '') {
+    const nt = noteId ? getNote(noteId) : null;
+    if (nt && !onItsSwipe(nt)) toastr.info(`이 노트는 ${nt.swipe + 1}번째 답변에 칠했어요. 그 답변으로 넘기면 형광펜이 보여요.`, '', { timeOut: 3500 });
     if (jumpBusy) { toastr.info('🦊 아직 앞쪽 페이지를 넘기는 중이에요. 조금만 기다려 주세요.', '', { timeOut: 2000, preventDuplicates: true }); return; }
     releaseHold?.('new jump');
     releaseGuard?.('new jump');
@@ -940,7 +965,7 @@ async function toggleBookmark(i, askLabel = true) {
             if (res === null || res === false || res === undefined) return;
             label = String(res).trim();
         }
-        d.bookmarks.push({ id: uid(), mesId: i, label, created: Date.now(), sig: sigAt(i) });
+        d.bookmarks.push({ id: uid(), mesId: i, label, created: Date.now(), ...anchorOf(i) });
         toastr.success('🦊 책갈피를 꽂았어요.');
     }
     persist();
@@ -957,7 +982,7 @@ async function addChapter(i) {
     if (res === null || res === false || res === undefined) return;
     const title = String(res).trim() || `${num}장`;
     if (existing) existing.title = title;
-    else d.chapters.push({ id: uid(), mesId: i, title, created: Date.now(), sig: sigAt(i) });
+    else d.chapters.push({ id: uid(), mesId: i, title, created: Date.now(), ...anchorOf(i) });
     persist();
     decorateChapters();
     refreshPanel();
@@ -980,7 +1005,9 @@ async function deleteChapter(id) {
 }
 
 function createNote({ mesId, start = null, end = null, quote = '', text = '', color = null, memo = '' }) {
-    const n = { id: uid(), mesId, start, end, quote, color, memo, created: Date.now(), updated: Date.now(), sig: sigAt(mesId) };
+    const n = { id: uid(), mesId, start, end, quote, color, memo, created: Date.now(), updated: Date.now(), ...anchorOf(mesId) };
+    const sw = swipeOf(mesId);
+    if (start != null && sw !== undefined) n.swipe = sw;
     if (start != null && text && text !== quote) n.text = text;
     data().notes.push(n);
     persist();
@@ -1686,7 +1713,7 @@ function drawCommunity(canvas, { text, trans = '', transFirst = false, who, chap
         return { listTop, rowY, boxTop, boxBottom, areaTop, avail: boxBottom - 40 - footH - areaTop };
     };
     let nCm = cms.length, G = geom(nCm);
-    while (nCm > 1 && measure(34).total > G.avail) G = geom(--nCm);
+    while (nCm > 0 && measure(34).total > G.avail) G = geom(--nCm);
     cms.length = nCm;
     const { listTop, rowY, boxTop, boxBottom, areaTop, avail } = G;
 
@@ -1697,6 +1724,7 @@ function drawCommunity(canvas, { text, trans = '', transFirst = false, who, chap
     rrect(g, X + IN, boxTop + 30, 8, boxBottom - boxTop - 60, 4); g.fill();
     let size = 52, m;
     for (; size >= 22; size -= 2) { m = measure(size); if (m.total <= avail) break; }
+    FIT.fs = m.laid[0]?.fs || 0; FIT.cut = m.total > avail; FIT.max = 52;
     if (m.total > avail) {
         const room = avail - (sub ? DIV : 0);
         for (const b of m.laid) {
@@ -1792,7 +1820,22 @@ const MASK_TAPES = [
 ];
 
 /** The words to hide, longest first (so "패트릭 스미스" wins over "패트릭"). */
-function maskWords(raw = settings().cardMasks) {
+/** The tape list belongs to the character (or group) whose chat is open. */
+const maskKey = () => libraryKey();
+function currentMasks() {
+    const s = settings();
+    if (!s.cardMasksBy || typeof s.cardMasksBy !== 'object') s.cardMasksBy = {};
+    // v1.18: the old shared list goes to the first character a card is made for (and stays a suggestion elsewhere)
+    if (!s.cardMasksMoved) { if (s.cardMasks && !s.cardMasksBy[maskKey()]) s.cardMasksBy[maskKey()] = s.cardMasks; s.cardMasksMoved = true; saveSettings(); }
+    return s.cardMasksBy[maskKey()] ?? '';
+}
+function setCurrentMasks(v) {
+    const s = settings();
+    if (!s.cardMasksBy || typeof s.cardMasksBy !== 'object') s.cardMasksBy = {};
+    s.cardMasksBy[maskKey()] = v;
+    saveSettings();
+}
+function maskWords(raw = currentMasks()) {
     const list = String(raw || '').split(/[,，、\n]/).map(w => w.trim()).filter(Boolean);
     return [...new Set(list)].sort((a, b) => b.length - a.length);
 }
@@ -1954,7 +1997,7 @@ function armMasks(g) {
     maskContext(g);
     const s = settings();
     migrateTape(s);
-    g.__stbsWords = maskWords(s.cardMasks);
+    g.__stbsWords = maskWords();
     g.__stbsTape = MASK_TAPES[s.cardMaskTape] || MASK_TAPES[0];
 }
 
@@ -1971,13 +2014,16 @@ function maskSectionHtml() {
     const s = settings();
     migrateTape(s);
     const c = ctx();
-    const names = [...new Set([c.name2, c.name1].filter(Boolean))].filter(n => !maskWords().includes(n));
+    const have = maskWords();
+    // names of this chat, plus words from the old shared list (before every character had its own)
+    const names = [...new Set([c.name2, c.name1, ...maskWords(s.cardMasks)].filter(Boolean))].filter(n => !have.includes(n)).slice(0, 8);
+    const who = c.groupId ? '이 그룹' : (c.name2 ? `${c.name2}` : '이 캐릭터');
     return `<section class="stbs-cx-sec stbs-mask-box">
-        <div class="stbs-cx-h">이름 가리기 <span class="stbs-dim">테이프</span></div>
-        <input id="stbs-card-mask" class="text_pole" placeholder="가릴 이름 (쉼표로 여러 개)" value="${esc(s.cardMasks || '')}">
+        <div class="stbs-cx-h">이름 가리기 <span class="stbs-dim">테이프 · ${esc(who)} 전용</span></div>
+        <input id="stbs-card-mask" class="text_pole" placeholder="가릴 이름 (쉼표로 여러 개)" value="${esc(currentMasks())}">
         ${names.length ? `<div class="stbs-mask-sugg">${names.map(n => `<button type="button" class="stbs-chip" data-mask-add="${esc(n)}"><i class="fa-solid fa-plus"></i> ${esc(n)}</button>`).join('')}</div>` : ''}
         <div class="stbs-tape-grid">${MASK_TAPES.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === (s.cardMaskTape || 0) ? 'active' : ''}" data-tape="${k}"><span class="stbs-tape-sw" style="background:${tapeSwatch(t)}" data-kind="${t.kind}"></span><b>${t.name}</b></button>`).join('')}</div>
-        <div class="stbs-hint">적은 단어만 테이프로 덮고, 뒤에 붙은 은·는·이·가는 그대로 둬요. 모든 카드에 똑같이 들어가요.</div>
+        <div class="stbs-hint">적은 단어만 테이프로 덮고, 뒤에 붙은 은·는·이·가는 그대로 둬요. 목록은 캐릭터마다 따로 기억해요.</div>
     </section>`;
 }
 function bindMaskSection(body, redraw) {
@@ -1985,12 +2031,12 @@ function bindMaskSection(body, redraw) {
     const inp = body.querySelector('#stbs-card-mask');
     if (!inp) return;
     const later = debounce(redraw, 150);
-    inp.addEventListener('input', (e) => { e.stopPropagation(); s.cardMasks = inp.value; saveSettings(); later(); });
+    inp.addEventListener('input', (e) => { e.stopPropagation(); setCurrentMasks(inp.value); later(); });
     body.querySelectorAll('[data-mask-add]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
         const w = b.dataset.maskAdd;
         if (!maskWords(inp.value).includes(w)) inp.value = inp.value.trim() ? `${inp.value.replace(/[,\s]+$/, '')}, ${w}` : w;
-        s.cardMasks = inp.value; saveSettings();
+        setCurrentMasks(inp.value);
         b.remove(); redraw();
     }));
     body.querySelectorAll('[data-tape]').forEach(b => b.addEventListener('click', (e) => {
@@ -2004,6 +2050,45 @@ function bindMaskSection(body, redraw) {
 // ---- shared pieces for every card design
 
 /** Fit the quote (and its translation) into a box: the first block is the big one. */
+/**
+ * Cut a long text into pieces that each fit one card: paragraph ends first, then sentence ends,
+ * then plain word breaks for one endless sentence. `fits(text)` draws a trial card.
+ */
+function splitForCards(text, fits) {
+    const sentences = (p) => p.match(/[^.!?。！？…"”」』]+[.!?。！？…"”」』]*\s*/g) || [p];
+    // units: paragraphs; a paragraph that can't fit alone is broken into sentences, then into words
+    let units = String(text || '').trim().split(/\n{2,}/).filter(p => p.trim()).map(t => ({ t: t.trim(), para: true }));
+    const join = (list) => list.map((u, k) => (k === 0 ? '' : u.para ? '\n\n' : ' ') + u.t).join('');
+    const out = [];
+    let i = 0, guard = 0;
+    while (i < units.length && guard++ < 2000) {
+        if (!fits(units[i].t)) {
+            const u = units[i];
+            let pieces = sentences(u.t).map(x => x.trim()).filter(Boolean);
+            if (pieces.length <= 1) {
+                // one endless sentence: halve it on a space until the halves fit
+                const words = u.t.split(/\s+/);
+                const mid = Math.max(1, Math.floor(words.length / 2));
+                pieces = words.length > 1 ? [words.slice(0, mid).join(' '), words.slice(mid).join(' ')] : [u.t.slice(0, u.t.length >> 1), u.t.slice(u.t.length >> 1)];
+            }
+            units.splice(i, 1, ...pieces.map((t, k) => ({ t, para: k === 0 && u.para })));
+            continue;
+        }
+        // the most units from i that still fit one card: gallop, then binary search
+        let ok = 1, step = 1;
+        while (i + ok + step <= units.length && fits(join(units.slice(i, i + ok + step)))) { ok += step; step *= 2; }
+        let lo = ok, hi = Math.min(units.length - i, ok + step) ;
+        while (hi - lo > 1) { const m = (lo + hi) >> 1; if (fits(join(units.slice(i, i + m)))) lo = m; else hi = m; }
+        if (hi > lo && i + hi <= units.length && hi !== ok + step && fits(join(units.slice(i, i + hi)))) lo = hi;
+        out.push(join(units.slice(i, i + lo)));
+        i += lo;
+    }
+    return out.length ? out : [String(text || '')];
+}
+
+/** What the last card layout did with the text: smallest size used and whether it had to cut the end off. */
+const FIT = { fs: 0, cut: false, max: 0 };
+
 function fitQuote(g, { main, sub, transFirst = false, font, maxW, avail, max = 60, min = 22, lh = 1.6, subScale = 0.72, gap = 56, para = 0.55, prep = (s) => s }) {
     main = String(main || '').trim(); sub = String(sub || '').trim();
     // short lines may grow: a one-liner should fill the card, not float in it
@@ -2024,6 +2109,7 @@ function fitQuote(g, { main, sub, transFirst = false, font, maxW, avail, max = 6
     };
     let size = max, m;
     for (; size >= min; size -= 2) { m = measure(size); if (m.total <= avail) break; }
+    FIT.fs = m.laid[0]?.fs || 0; FIT.cut = m.total > avail; FIT.max = max;
     if (m.total > avail) {
         const room = avail - (sub ? gap : 0);
         for (const b of m.laid) {
@@ -2370,7 +2456,7 @@ function cardMemo(g, W, H, I, t, A) {
     // faint desk grain
     g.fillStyle = t.darkBg ? 'rgba(255,255,255,.018)' : 'rgba(0,0,0,.018)';
     for (let k = 0; k < 14; k++) g.fillRect(0, r() * H, W, 2 + r() * 6);
-    const NW = W - 220, NH = Math.round(Math.min(H - 330, NW * 1.12));
+    const NW = W - 220, NH = Math.round(H > 1400 ? H - 330 : Math.min(H - 330, NW * 1.12));
     const nx = (W - NW) / 2, ny = (H - NH) / 2 - 20;
     const ang = 0.022 + (r() - 0.5) * 0.02;
     g.save();
@@ -2411,7 +2497,7 @@ function cardMemo(g, W, H, I, t, A) {
 }
 
 function cardSubtitle(g, W, H, I, t, A) {
-    const bar = Math.round(H * 0.075);
+    const bar = Math.min(130, Math.round(H * 0.075));
     g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     const img = I.show.avatar ? (A.full || A.thumb) : null;
     if (img) { g.save(); g.beginPath(); g.rect(0, bar, W, H - bar * 2); g.clip(); coverImage(g, img, 0, bar, W, H - bar * 2); g.restore(); }
@@ -2427,7 +2513,7 @@ function cardSubtitle(g, W, H, I, t, A) {
     if (I.show.fox) foxStamp(g, W - 70, bar * 0.5, bar * 0.3);
     const maxW = W - 180;
     const font = (fs, small) => `${small ? 500 : 600} ${fs}px ${ui}`;
-    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: H * 0.42, max: 56, min: 26, lh: 1.5, subScale: 0.72, gap: 26 });
+    const m = fitQuote(g, { main: I.text, sub: I.trans, transFirst: I.transFirst, font, maxW, avail: H > 1950 ? H - bar * 2 - 420 : H * 0.42, max: 56, min: 26, lh: 1.5, subScale: 0.72, gap: 26 });
     const y = H - bar - 100 - m.total;
     g.save();
     g.shadowColor = 'rgba(0,0,0,.75)'; g.shadowBlur = 16; g.shadowOffsetY = 2;
@@ -2528,11 +2614,27 @@ function cardPoster(g, W, H, I, t, A) {
 const CARD_DRAW = { underline: cardUnderline, page: cardPage, minimal: cardMinimal, letter: cardLetter, polaroid: cardPolaroid, memo: cardMemo, subtitle: cardSubtitle, chat: cardChat, poster: cardPoster };
 
 /** Draw a card. info: text, trans, transFirst, who, chapter, title, page, time, hl, show, commu, seed; assets: thumb/full images. */
+/**
+ * "길이 자동": the card is as tall as the text needs. Width stays 1080; the height grows until every
+ * line fits at a comfortable size (or until AUTO_MAX — phones refuse bigger pictures).
+ */
+const AUTO_MIN = 1350, AUTO_MAX = 14400, AUTO_FS = 38;
 function drawCard(canvas, info, layoutKey = 'underline', tintIdx = 0, ratio = '4:5', assets = {}) {
+    if (ratio !== 'auto') return drawCardAt(canvas, info, layoutKey, tintIdx, CARD_RATIOS[ratio] || 1350, assets);
+    const ok = (h) => { drawCardAt(canvas, info, layoutKey, tintIdx, h, assets); return !FIT.cut && FIT.fs >= Math.min(AUTO_FS, FIT.max); };
+    if (ok(AUTO_MIN)) return;
+    let lo = AUTO_MIN, hi = AUTO_MAX;
+    if (!ok(hi)) return;          // too long even for the tallest card: drawn (cut), FIT.cut tells the editor
+    while (hi - lo > 60) { const mid = Math.round((lo + hi) / 2 / 10) * 10; if (ok(mid)) hi = mid; else lo = mid; }
+    ok(hi);
+}
+
+function drawCardAt(canvas, info, layoutKey, tintIdx, height, assets = {}) {
     const L = CARD_LAYOUTS[layoutKey] || CARD_LAYOUTS.underline;
     const t = L.tints[tintIdx] || L.tints[0];
+    FIT.fs = 0; FIT.cut = false; FIT.max = 0;
     canvas.width = 1080;
-    canvas.height = CARD_RATIOS[ratio] || 1350;
+    canvas.height = height;
     const g = canvas.getContext('2d');
     armMasks(g);
     const show = { who: true, chapter: true, avatar: true, page: true, fox: true, title: true, ...(info.show || {}) };
@@ -2600,12 +2702,13 @@ function cardLayoutOf(s) {
     }
     s.cardTints = { ...(s.cardTints || {}) };
     s.cardShow = { who: true, chapter: true, avatar: true, page: true, fox: s.cardFox !== false, title: true, ...(s.cardShow || {}) };
-    if (!CARD_RATIOS[s.cardRatio]) s.cardRatio = '4:5';
+    if (!CARD_RATIOS[s.cardRatio] && s.cardRatio !== 'auto') s.cardRatio = '4:5';
     return s.cardLayout;
 }
 
 const CARD_SHOW = [['who', '화자 이름'], ['title', '캐릭터 이름(제목)'], ['chapter', '챕터'], ['avatar', '프로필 사진'], ['page', '쪽수'], ['fox', '여우 도장']];
-const RATIO_NAMES = { '4:5': '4:5 피드', '1:1': '1:1 정사각', '9:16': '9:16 스토리' };
+const RATIO_NAMES = { '4:5': '4:5 피드', '1:1': '1:1 정사각', '9:16': '9:16 스토리', auto: '길이 자동' };
+const CARD_RATIO_KEYS = [...Object.keys(CARD_RATIOS), 'auto'];
 
 function openCard({ text, trans = '', mesId, who, note = null }) {
     const s = settings();
@@ -2647,7 +2750,7 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
                     <div class="stbs-cx-h">디자인</div>
                     <div class="stbs-cx-lays">${tileHtml}</div>
                     <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints" id="stbs-cx-tints"></div></div>
-                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg" id="stbs-cx-ratio">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg stbs-seg-wrap" id="stbs-cx-ratio">${CARD_RATIO_KEYS.map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
                 </section>
                 <section class="stbs-cx-sec">
                     <div class="stbs-cx-h stbs-between"><span>문장</span>
@@ -2722,8 +2825,20 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         }).join('');
         body.querySelector('#stbs-commu-box').hidden = layout !== 'commu';
     };
-    const ratioCss = () => canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[s.cardRatio]}`);
-    const redraw = () => { drawCard(canvas, info(), layout, tint(layout), s.cardRatio, assets); ratioCss(); };
+    const view = body.querySelector('.stbs-cx-view');
+    const warn = document.createElement('div');
+    warn.className = 'stbs-cx-warn';
+    warn.hidden = true;
+    view.appendChild(warn);
+    const ratioCss = () => { canvas.style.setProperty('aspect-ratio', `${canvas.width} / ${canvas.height}`); view.classList.toggle('tall', canvas.height > 2000); };
+    const showFit = () => {
+        if (!FIT.cut) { warn.hidden = true; return; }
+        warn.hidden = false;
+        warn.innerHTML = s.cardRatio === 'auto'
+            ? `<i class="fa-solid fa-scissors"></i><span>한 장에 담기엔 너무 길어서 끝이 잘렸어요.</span><button type="button" class="stbs-chip" data-split><i class="fa-solid fa-layer-group"></i> 여러 장으로 나눠 저장</button>`
+            : `<i class="fa-solid fa-scissors"></i><span>글이 길어서 끝이 잘렸어요.</span><button type="button" class="stbs-chip" data-ratio="auto"><i class="fa-solid fa-arrows-up-down"></i> 길이 자동으로</button>`;
+    };
+    const redraw = () => { drawCard(canvas, info(), layout, tint(layout), s.cardRatio, assets); ratioCss(); showFit(); };
     // little live previews of every design, with this very text
     const off = document.createElement('canvas');
     const drawThumbs = () => {
@@ -2762,10 +2877,11 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         const ra = e.target.closest('[data-ratio]');
         if (ra) {
             s.cardRatio = ra.dataset.ratio; saveSettings();
-            body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra));
+            body.querySelectorAll('#stbs-cx-ratio [data-ratio]').forEach(x => x.classList.toggle('active', x.dataset.ratio === s.cardRatio));
             redraw();
             return;
         }
+        if (e.target.closest('[data-split]')) { saveSplit(); return; }
         const sh = e.target.closest('[data-show]');
         if (sh) {
             const k = sh.dataset.show;
@@ -2796,8 +2912,30 @@ function openCard({ text, trans = '', mesId, who, note = null }) {
         }
     });
     body.querySelector('#stbs-card-save').addEventListener('click', () => {
+        if (FIT.cut && s.cardRatio === 'auto') { saveSplit(); return; }
         canvas.toBlob(b => b && download(`명대사_${fmtDate(Date.now())}_${uid().slice(-4)}.png`, b), 'image/png');
     });
+    // Too long for one picture: cut at paragraph (then sentence) ends into cards that each fit, and save them in order.
+    const saveSplit = async () => {
+        const inf = info();
+        const cv = document.createElement('canvas');
+        // one trial drawing per check: the tallest card, at a readable size
+        const fitsOne = (txt) => { drawCardAt(cv, { ...inf, text: txt, trans: '', series: { k: 99, n: 99 } }, layout, tint(layout), AUTO_MAX, assets); return !FIT.cut && FIT.fs >= Math.min(AUTO_FS, FIT.max); };
+        const busy = toastr.info('긴 글을 카드 여러 장으로 나누는 중이에요…', '', { timeOut: 0, extendedTimeOut: 0 });
+        await sleep(30);
+        let parts;
+        try { parts = splitForCards(inf.text, fitsOne); } finally { toastr.clear(busy); }
+        if (inf.trans.trim()) toastr.info('나눠 저장할 때는 번역 칸은 빼고 원문만 넣어요.');
+        const stem = `명대사_${fmtDate(Date.now())}_${uid().slice(-4)}`;
+        for (let k = 0; k < parts.length; k++) {
+            drawCard(cv, { ...inf, text: parts[k], trans: '', series: s.cardShow.count !== false ? { k: k + 1, n: parts.length } : null }, layout, tint(layout), 'auto', assets);
+            const b = await new Promise(r => cv.toBlob(r, 'image/png'));
+            if (b) download(`${stem}_${String(k + 1).padStart(2, '0')}.png`, b);
+            await sleep(350);
+        }
+        toastr.success(`${parts.length}장으로 나눠 저장했어요.`);
+        redraw();
+    };
     body.querySelector('#stbs-card-copy').addEventListener('click', () => {
         canvas.toBlob(async (b) => {
             try {
@@ -3400,7 +3538,9 @@ function renderBookmarks() {
 function noteCard(n, { inScrap = null } = {}) {
     const s = settings();
     const colorCss = n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : '';
-    const stale = staleNotes.has(n.id) ? '<span class="stbs-badge">원문 변경됨</span>' : '';
+    const other = !onItsSwipe(n);
+    const stale = other ? `<span class="stbs-badge" title="이 메시지에서 지금 보이는 답변과 다른 답변에 칠했어요"><i class="fa-solid fa-shuffle"></i> ${n.swipe + 1}번째 답변</span>`
+        : staleNotes.has(n.id) ? '<span class="stbs-badge">원문 변경됨</span>' : '';
     const quote = n.start != null
         ? `<div class="stbs-note-quote">${esc(noteText(n))}</div>${n.trans ? `<div class="stbs-note-trans">${esc(n.trans)}</div>` : ''}`
         : `<div class="stbs-note-quote stbs-whole"><span class="stbs-badge">메시지 전체</span> ${esc(clip(plain(msg(n.mesId)?.mes), 120))}</div>`;
@@ -3571,16 +3711,24 @@ function searchResults() {
         if (hidden) hiddenHits++;
         if (qr) qrHits++;
         if (out.length >= LIMIT) continue;
-        const from = Math.max(0, idx - 40);
-        const to = Math.min(text.length, idx + q.length + 60);
-        const pre = (from > 0 ? '…' : '') + text.slice(from, idx);
-        const hit = text.slice(idx, idx + q.length);
-        const post = text.slice(idx + q.length, to) + (to < text.length ? '…' : '');
+        // up to three places in the message, each with a little text around it (nearby hits share one line)
+        const spots = [];
+        for (let p = idx; p !== -1 && spots.length < 3; p = lower.indexOf(q, p + q.length)) {
+            const last = spots[spots.length - 1];
+            if (last && p - last.to < 30) { last.hits.push(p); last.to = Math.min(text.length, p + q.length + 60); continue; }
+            spots.push({ from: Math.max(0, p - 40), to: Math.min(text.length, p + q.length + 60), hits: [p] });
+        }
+        const snippet = (sp) => {
+            let html = sp.from > 0 ? '…' : '', at = sp.from;
+            for (const h of sp.hits) { html += esc(text.slice(at, h)) + `<mark class="stbs-find">${esc(text.slice(h, h + q.length))}</mark>`; at = h + q.length; }
+            return html + esc(text.slice(at, sp.to)) + (sp.to < text.length ? '…' : '');
+        };
+        const shown = spots.reduce((a, sp) => a + sp.hits.length, 0);
         out.push(`
         <div class="stbs-item stbs-result ${hidden ? 'is-hidden' : ''}" data-jump="${i}">
             <div class="stbs-grow">
                 ${hidden || qr || folded ? `<div class="stbs-badges">${hidden ? '<span class="stbs-badge stbs-hid-badge"><i class="fa-solid fa-eye-slash"></i> 숨김</span>' : ''}${qr ? `<span class="stbs-badge stbs-qr-badge"><i class="fa-solid fa-bolt"></i> ${m.extra.type === 'narrator' ? '내레이터' : 'QR·코멘트'}</span>` : ''}${folded ? '<span class="stbs-badge stbs-fold-badge"><i class="fa-solid fa-caret-down"></i> 접힌 내용</span>' : ''}</div>` : ''}
-                <div class="stbs-snippet">${esc(pre)}<mark class="stbs-find">${esc(hit)}</mark>${esc(post)}</div>
+                ${spots.map(sp => `<div class="stbs-snippet">${snippet(sp)}</div>`).join('')}${hits > shown ? `<div class="stbs-dim stbs-more-hits">이 메시지에 ${hits - shown}번 더 있어요</div>` : ''}
                 ${metaLine(i, `${chapters.length ? esc(chapterLabel(chapterOf(i, chapters))) : ''}${hits > 1 ? ` · ${hits}번` : ''}`)}
             </div>
         </div>`);
@@ -3593,7 +3741,16 @@ function searchResults() {
     return `<div class="stbs-count">메시지 ${out.length}${out.length >= LIMIT ? '+' : ''}개${[hs === 'all' && hiddenHits ? `숨김 ${hiddenHits}` : '', ui.scope !== 'qr' && qrHits ? `QR ${qrHits}` : ''].filter(Boolean).map(t => ` <span class="stbs-dim">(${t})</span>`).join('')} · ${total}번 등장${out.length >= LIMIT ? ` <span class="stbs-dim">(처음 ${LIMIT}개만 표시)</span>` : ''}</div>` + out.join('');
 }
 
+/** Counting a long chat takes a moment: keep the result until the chat changes. */
+let chatRev = 0;
+const statsCache = { key: '', val: null };
 function computeStats() {
+    const c = ctx(), chat = c.chat || [];
+    const key = `${c.getCurrentChatId?.()}|${chat.length}|${chatRev}|${settings().charsPerPage}|${sigAt(chat.length - 1)}|${data().chapters.map(x => x.mesId).join(',')}`;
+    if (statsCache.key !== key) { statsCache.val = computeStatsNow(); statsCache.key = key; }
+    return statsCache.val;
+}
+function computeStatsNow() {
     const chat = ctx().chat;
     const s = settings();
     const cpp = Math.max(100, Number(s.charsPerPage) || 600);
@@ -3901,7 +4058,7 @@ function openCardSeries(notes, name = '') {
                     <div class="stbs-cx-h">디자인 <span class="stbs-dim">모든 장에 똑같이</span></div>
                     <div class="stbs-cx-lays">${layouts.map(([k, L]) => `<button type="button" class="stbs-cx-lay ${k === layout ? 'active' : ''}" data-layout="${k}"><canvas class="stbs-cx-thumb" data-thumb="${k}" width="216" height="270"></canvas><span>${L.name}</span></button>`).join('')}</div>
                     <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints" id="stbs-cx-tints"></div></div>
-                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg stbs-seg-wrap">${CARD_RATIO_KEYS.map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
                 </section>
                 <section class="stbs-cx-sec">
                     <div class="stbs-cx-h">카드에 넣을 것</div>
@@ -3925,7 +4082,8 @@ function openCardSeries(notes, name = '') {
     const draw = (cv, k, lay = layout, ratio = s.cardRatio) => drawCard(cv, infoAt(k), lay, tint(lay), ratio, items[k].assets);
     const redraw = () => {
         draw(canvas, cur);
-        canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[s.cardRatio]}`);
+        canvas.style.setProperty('aspect-ratio', `${canvas.width} / ${canvas.height}`);
+        body.querySelector('.stbs-cx-view')?.classList.toggle('tall', canvas.height > 2000);
         body.querySelector('#stbs-series-at').textContent = `${cur + 1} / ${items.length}`;
         body.querySelectorAll('[data-goto]').forEach(li => li.classList.toggle('on', Number(li.dataset.goto) === cur));
     };
@@ -4137,6 +4295,7 @@ function chapterRange(id) {
 function openSummaryCard(kind, chapterId = null) {
     const s = settings();
     s.summaryTint ??= 0;
+    let ratio = CARD_RATIOS[s.cardRatio] ? s.cardRatio : '4:5';   // 요약 카드는 고정 크기만
     const show = { avatar: s.cardShow?.avatar !== false, fox: s.cardFox !== false, title: s.cardShow?.title !== false, who: s.cardShow?.who !== false };
     const c = ctx();
     const title = c.groupId ? (c.groups?.find?.(x => x.id === c.groupId)?.name || '') : (c.name2 || '');
@@ -4167,7 +4326,7 @@ function openSummaryCard(kind, chapterId = null) {
             <div class="stbs-cx-side">
                 <section class="stbs-cx-sec">
                     <div class="stbs-cx-row"><span class="stbs-cx-k">색</span><div class="stbs-cx-tints">${SUMMARY_TINTS.map((t, k) => `<button type="button" class="stbs-cx-tint ${k === s.summaryTint ? 'active' : ''}" data-tint="${k}"><span style="background:${t.bg}"><i style="background:${t.accent}"></i></span>${t.name}</button>`).join('')}</div></div>
-                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === s.cardRatio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
+                    <div class="stbs-cx-row"><span class="stbs-cx-k">크기</span><div class="stbs-seg">${Object.keys(CARD_RATIOS).map(r => `<button type="button" data-ratio="${r}" class="${r === ratio ? 'active' : ''}">${RATIO_NAMES[r]}</button>`).join('')}</div></div>
                     <div class="stbs-cx-checks">${[['title', '캐릭터 이름'], ...(kind === 'chapter' ? [['who', '화자 이름']] : []), ['avatar', '프로필 사진'], ['fox', '여우 도장']].map(([k, n]) => `<button type="button" class="stbs-cx-check ${show[k] ? 'on' : ''}" data-show="${k}"><i class="fa-solid fa-check"></i>${n}</button>`).join('')}</div>
                 </section>
                 ${kind === 'chapter' ? `<section class="stbs-cx-sec">
@@ -4187,14 +4346,14 @@ function openSummaryCard(kind, chapterId = null) {
     const A = {};
     const redraw = () => {
         if (kind === 'chapter') S.lines = picks.map(id => all.find(x => x.id === id)).filter(Boolean);
-        drawSummary(canvas, S, s.summaryTint, s.cardRatio, A);
-        canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[s.cardRatio]}`);
+        drawSummary(canvas, S, s.summaryTint, ratio, A);
+        canvas.style.setProperty('aspect-ratio', `1080 / ${CARD_RATIOS[ratio]}`);
     };
     body.addEventListener('click', (e) => {
         const tn = e.target.closest('[data-tint]');
         if (tn) { s.summaryTint = Number(tn.dataset.tint); saveSettings(); body.querySelectorAll('[data-tint]').forEach(x => x.classList.toggle('active', x === tn)); redraw(); return; }
         const ra = e.target.closest('[data-ratio]');
-        if (ra) { s.cardRatio = ra.dataset.ratio; saveSettings(); body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra)); redraw(); return; }
+        if (ra) { ratio = s.cardRatio = ra.dataset.ratio; saveSettings(); body.querySelectorAll('[data-ratio]').forEach(x => x.classList.toggle('active', x === ra)); redraw(); return; }
         const sh = e.target.closest('[data-show]');
         if (sh) { const k = sh.dataset.show; show[k] = !show[k]; sh.classList.toggle('on', show[k]); if (s.cardShow && (k === 'title' || k === 'who')) { s.cardShow[k] = show[k]; saveSettings(); } redraw(); return; }
         const pl = e.target.closest('[data-pickline]');
@@ -4360,7 +4519,7 @@ function startBmDrag(e, handle) {
 
 // ---------------------------------------------------------------- library: this character's other chats (v1.15)
 
-const library = { key: '', at: 0, loading: false, chats: [], error: '' };
+const library = { key: '', at: 0, loading: false, chats: [], error: '', cache: new Map(), reading: new Set() };
 
 function libraryKey() {
     const c = ctx();
@@ -4372,50 +4531,87 @@ function chatLabel(fileId) {
     return m ? `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(2, '0')} ${m[4].padStart(2, '0')}:${m[5].padStart(2, '0')}` : String(fileId);
 }
 
+/** Read one other chat file (the whole thing — SillyTavern has no lighter way). */
+async function readChatFile(id) {
+    const c = ctx();
+    const res = c.groupId
+        ? await fetch('/api/chats/group/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ id }) })
+        : await fetch('/api/chats/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ ch_name: c.characters[c.characterId].name, file_name: id, avatar_url: c.characters[c.characterId].avatar }) });
+    const arr = await res.json();
+    if (!Array.isArray(arr)) return { meta: {}, messages: [] };
+    const head = arr.length && Object.hasOwn(arr[0] || {}, 'chat_metadata');
+    return { meta: head ? arr[0].chat_metadata || {} : {}, messages: head ? arr.slice(1) : arr };
+}
+
 async function loadLibrary(force = false) {
     const key = libraryKey();
     if (library.loading || (!force && library.key === key && Date.now() - library.at < 60000)) return;
     const c = ctx();
     library.loading = true; library.error = '';
     try {
-        if (c.groupId) throw new Error('group');
-        const avatar = c.characters?.[c.characterId]?.avatar;
-        if (!avatar) throw new Error('none');
-        const res = await fetch('/api/characters/chats', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, metadata: true }) });
-        const list = Object.values(await res.json() || {}).filter(x => x?.file_name);
-        // older SillyTavern doesn't send the metadata with the list: read each chat's first line instead
-        const need = list.filter(x => !x.chat_metadata);
+        let list;
+        if (c.groupId) {
+            const group = c.groups?.find?.(x => x.id === c.groupId);
+            list = (group?.chats || []).map(id => ({ file_name: String(id) }));
+        } else {
+            const avatar = c.characters?.[c.characterId]?.avatar;
+            if (!avatar) throw new Error('none');
+            const res = await fetch('/api/characters/chats', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, metadata: true }) });
+            list = Object.values(await res.json() || {}).filter(x => x?.file_name);
+        }
+        const current = c.getCurrentChatId?.();
+        // Chats whose saved data didn't come with the list: read the file — once, until it changes.
+        const need = list.filter(x => !x.chat_metadata && String(x.file_name).replace(/\.jsonl$/, '') !== current);
         for (let k = 0; k < need.length; k += 4) {
             await Promise.all(need.slice(k, k + 4).map(async (x) => {
+                const id = String(x.file_name).replace(/\.jsonl$/, '');
+                const stamp = `${x.last_mes ?? ''}|${x.chat_items ?? ''}|${x.file_size ?? ''}`;
+                const hit = library.cache.get(`${key}|${id}`);
+                if (hit && hit.stamp === stamp && !(c.groupId && force)) { x.chat_metadata = hit.meta; x.__messages = hit.messages; return; }
                 try {
-                    const r = await fetch('/api/chats/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ ch_name: c.characters[c.characterId].name, file_name: String(x.file_name).replace(/\.jsonl$/, ''), avatar_url: avatar }) });
-                    const arr = await r.json();
-                    x.chat_metadata = (Array.isArray(arr) ? arr[0]?.chat_metadata : null) || {};
-                    x.__messages = Array.isArray(arr) ? arr.slice(1) : null;
+                    const f = await readChatFile(id);
+                    x.chat_metadata = f.meta; x.__messages = f.messages;
+                    library.cache.set(`${key}|${id}`, { stamp, meta: f.meta, messages: f.messages });
                 } catch { x.chat_metadata = {}; }
             }));
         }
-        const current = c.getCurrentChatId?.();
         library.chats = list.map(x => {
             const id = String(x.file_name).replace(/\.jsonl$/, '');
             const isCur = id === current;
-            const d = isCur ? data() : (x.chat_metadata?.[META_KEY] || {});
-            return { id, label: chatLabel(id), isCur, last: Number(x.last_mes) || Date.parse(x.last_mes) || 0, items: Number(x.chat_items) || 0, notes: d.notes || [], bookmarks: d.bookmarks || [], review: d.review || null, messages: isCur ? null : x.__messages || null };
+            const d = isCur ? data() : cleanData(x.chat_metadata?.[META_KEY]);
+            const msgs = isCur ? null : x.__messages || library.cache.get(`${key}|${id}`)?.messages || null;
+            const lastMsg = msgs?.[msgs.length - 1];
+            const last = Number(x.last_mes) || Date.parse(x.last_mes) || Date.parse(lastMsg?.send_date) || 0;
+            return { id, label: chatLabel(id), isCur, last, items: Number(x.chat_items) || msgs?.length || 0, notes: d.notes || [], bookmarks: d.bookmarks || [], review: d.review || null, messages: msgs };
         }).filter(x => x.notes.length || x.bookmarks.length || x.isCur).sort((a, b) => (b.isCur - a.isCur) || b.last - a.last);
         library.key = key; library.at = Date.now();
     } catch (err) {
         library.chats = []; library.key = key; library.at = Date.now();
-        library.error = err?.message === 'group' ? 'group' : 'fail';
+        library.error = 'fail';
     } finally {
         library.loading = false;
         if (ui.tab === 'library') refreshPanel();
     }
 }
 
+/** An open chat block shows "메시지 전체" notes and nameless bookmarks: fetch that chat's text once, on demand. */
+function needTexts(ch) {
+    if (ch.isCur || ch.messages || library.reading.has(ch.id)) return;
+    if (!ch.notes.some(n => n.start == null) && !ch.bookmarks.some(b => !b.label)) return;
+    library.reading.add(ch.id);
+    const key = libraryKey();
+    readChatFile(ch.id).then(f => {
+        ch.messages = f.messages;
+        library.cache.set(`${key}|${ch.id}`, { stamp: library.cache.get(`${key}|${ch.id}`)?.stamp ?? '', meta: f.meta, messages: f.messages });
+    }).catch(() => { ch.messages = []; }).finally(() => {
+        library.reading.delete(ch.id);
+        if (ui.tab === 'library') refreshPanel();
+    });
+}
+
 function renderLibrary() {
     const key = libraryKey();
     if (library.key !== key || Date.now() - library.at > 60000) loadLibrary();
-    if (library.error === 'group') return emptyState('그룹 채팅에서는 아직 못 넘나들어요', '캐릭터 한 명과의 채팅에서 써 주세요.');
     if (library.loading && library.key !== key) return emptyState('서재를 살펴보는 중이에요…', '이 캐릭터와 나눈 다른 채팅들을 열어 보고 있어요.');
     if (library.error) return emptyState('다른 채팅을 읽지 못했어요', '<span class="stbs-btn" data-act="lib-refresh"><i class="fa-solid fa-rotate"></i> 다시 시도</span>', false);
     const q = (ui.libQ || '').trim().toLowerCase();
@@ -4428,11 +4624,11 @@ function renderLibrary() {
     const blocks = chats.map(ch => {
         const rows = [];
         if (kind !== 'bookmark') for (const n of ch.notes) {
-            const text = n.start == null ? (ch.messages ? plainKeep(ch.messages[n.mesId]?.mes) : '') : (n.text || n.quote || '');
+            const text = n.start == null ? (ch.isCur ? plainKeep(msg(n.mesId)?.mes) : ch.messages ? plainKeep(ch.messages[n.mesId]?.mes) : '') : (n.text || n.quote || '');
             if (tag && !noteTags(n).includes(tag)) continue;
             if (q && !`${text}\n${n.memo || ''}`.toLowerCase().includes(q)) continue;
             rows.push({ t: n.mesId, html: `<div class="stbs-note stbs-lib-row ${n.color == null ? 'no-color' : ''}" ${n.color != null ? `style="--bar:${esc(s.colors[n.color])}"` : ''} data-act="lib-open" data-chat="${esc(ch.id)}" data-mes="${n.mesId}" data-nid="${n.id}">
-                <div class="stbs-note-quote">${text ? esc(text) : `<span class="stbs-badge">메시지 전체</span> #${n.mesId}`}</div>
+                <div class="stbs-note-quote">${n.start == null ? '<span class="stbs-badge">메시지 전체</span> ' : ''}${text ? esc(n.start == null ? clip(text, 160) : text) : library.reading.has(ch.id) ? '<span class="stbs-dim">불러오는 중…</span>' : `#${n.mesId}`}</div>
                 ${n.memo ? `<div class="stbs-note-memo">${memoHtml(n.memo)}</div>` : ''}
                 <div class="stbs-meta">#${n.mesId} · ${fmtDate(n.updated || n.created)}</div></div>` });
         }
@@ -4448,6 +4644,7 @@ function renderLibrary() {
         total += rows.length;
         rows.sort((a, b) => a.t - b.t);
         const open = ui.libOpen?.get(ch.id) ?? (ch.isCur || !!q || !!tag);
+        if (open) needTexts(library.chats.find(x => x.id === ch.id) || ch);
         return `<div class="stbs-lib-chat ${open ? 'open' : ''}">
             <div class="stbs-lib-head" data-act="lib-toggle" data-chat="${esc(ch.id)}">
                 <i class="fa-solid fa-chevron-right stbs-lib-caret"></i>
@@ -4476,7 +4673,7 @@ async function openChatAndJump(chatId, mesId, noteId) {
     if (chatId === c.getCurrentChatId?.()) { jumpTo(mesId, noteId); return; }
     pendingJump = { chatId, mesId, noteId, at: Date.now() };
     toastr.info('🦊 그 채팅을 펼치는 중이에요…', '', { timeOut: 2000 });
-    try { await c.openCharacterChat(chatId); }
+    try { if (c.groupId) await c.openGroupChat(c.groupId, chatId); else await c.openCharacterChat(chatId); }
     catch { pendingJump = null; toastr.warning('그 채팅을 열지 못했어요.'); }
 }
 function runPendingJump() {
@@ -4488,6 +4685,71 @@ function runPendingJump() {
 }
 
 // ---------------------------------------------------------------- export / import
+
+/**
+ * Data that comes from outside (a backup file, another chat's metadata) is only taken in this shape:
+ * known fields, right types, ids that are safe to put in the page. Anything else is dropped.
+ */
+const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const str = (v, n = 4000) => (typeof v === 'string' ? v.slice(0, n) : '');
+const int = (v, lo = 0, hi = 1e7) => (Number.isInteger(v) && v >= lo && v <= hi ? v : null);
+const num = (v) => (typeof v === 'number' && isFinite(v) ? v : undefined);
+function cleanItem(kind, x) {
+    if (!x || typeof x !== 'object') return null;
+    const id = typeof x.id === 'string' && ID_RE.test(x.id) ? x.id : uid();
+    const base = { id, created: num(x.created) ?? Date.now() };
+    if (kind === 'scrapbooks' || kind === 'scrap') {
+        if (!Array.isArray(x.noteIds)) return null;
+        return { ...base, name: str(x.name, 60) || '스크랩북', emoji: str(x.emoji, 8) || '📒', noteIds: x.noteIds.filter(v => typeof v === 'string' && ID_RE.test(v)), updated: num(x.updated) ?? Date.now() };
+    }
+    const mesId = int(x.mesId);
+    if (mesId === null) return null;
+    const anchor = { mesId, sig: str(x.sig, 40), psig: str(x.psig, 40) };
+    if (!anchor.sig) delete anchor.sig;
+    if (!anchor.psig) delete anchor.psig;
+    if (kind === 'bookmarks' || kind === 'bookmark') {
+        const b = { ...base, ...anchor, label: str(x.label, 200) };
+        if (str(x.folder, 60)) b.folder = str(x.folder, 60);
+        if (num(x.order) !== undefined) b.order = x.order;
+        return b;
+    }
+    if (kind === 'chapters' || kind === 'chapter') {
+        const c = { ...base, ...anchor, title: str(x.title, 120) || '챕터' };
+        const r = int(x.rating, 0, 5);
+        if (r) c.rating = r;
+        if (str(x.review, 300)) c.review = str(x.review, 300);
+        return c;
+    }
+    if (kind === 'notes' || kind === 'note') {
+        const start = int(x.start), end = int(x.end);
+        const ranged = start !== null && end !== null && end > start;
+        const n = { ...base, ...anchor, start: ranged ? start : null, end: ranged ? end : null, quote: str(x.quote), color: int(x.color, 0, 3), memo: str(x.memo, 2000), updated: num(x.updated) ?? Date.now() };
+        if (ranged && str(x.text)) n.text = str(x.text);
+        if (str(x.trans)) n.trans = str(x.trans);
+        if (int(x.swipe, 0, 9999) !== null) n.swipe = x.swipe;
+        if (ranged && !n.quote) return null;
+        return n;
+    }
+    return null;
+}
+function cleanTrash(t) {
+    if (!t || typeof t !== 'object' || !TRASH_KIND[t.kind]) return null;
+    const item = cleanItem(t.kind, t.item);
+    if (!item) return null;
+    const out = { id: typeof t.id === 'string' && ID_RE.test(t.id) ? t.id : uid(), kind: t.kind, item, deleted: num(t.deleted) ?? Date.now() };
+    if (Array.isArray(t.scraps)) out.scraps = t.scraps.filter(v => typeof v === 'string' && ID_RE.test(v));
+    return out;
+}
+/** Another chat's saved data (서재): the same rules, without touching the original. */
+function cleanData(d) {
+    const out = { notes: [], bookmarks: [], review: null };
+    if (!d || typeof d !== 'object') return out;
+    out.notes = (Array.isArray(d.notes) ? d.notes : []).map(x => cleanItem('notes', x)).filter(Boolean);
+    out.bookmarks = (Array.isArray(d.bookmarks) ? d.bookmarks : []).map(x => cleanItem('bookmarks', x)).filter(Boolean);
+    const r = int(d.review?.rating, 0, 5);
+    if (r) out.review = { rating: r, text: str(d.review?.text, 300) };
+    return out;
+}
 
 function buildMarkdown() {
     const c = ctx();
@@ -4580,15 +4842,26 @@ function openExport() {
         if (!file) return;
         try {
             const json = JSON.parse(await file.text());
-            if (json?.format !== 'st-bookshelf' || !json.data) throw new Error('format');
+            if (json?.format !== 'st-bookshelf' || !json.data || typeof json.data !== 'object') throw new Error('format');
+            const here = ctx().getCurrentChatId();
+            if (json.chat && json.chat !== here) {
+                e.target.value = '';
+                const ok = await ctx().Popup.show.confirm('🦊 다른 채팅의 백업이에요',
+                    `이 파일은 <b>${esc(json.chat)}</b> 채팅의 백업이에요.<br>지금 채팅(<b>${esc(here)}</b>)에 불러오면 책갈피·노트가 같은 번호의 다른 메시지에 붙을 수 있어요.<br><br>그래도 불러올까요?`);
+                if (!ok) return;
+            }
             const d = data();
-            let added = 0;
-            if (json.data.review && !(d.review.rating || d.review.text)) d.review = { ...json.data.review };
+            let added = 0, skipped = 0;
+            const r = int(json.data.review?.rating, 0, 5);
+            if ((r || str(json.data.review?.text, 300)) && !(d.review.rating || d.review.text)) d.review = { rating: r || 0, text: str(json.data.review?.text, 300) };
             for (const k of ['bookmarks', 'notes', 'chapters', 'scrapbooks', 'trash']) {
                 const have = new Set(d[k].map(x => x.id));
-                for (const item of json.data[k] || []) {
-                    if (!item || have.has(item.id)) continue;
-                    if (k === 'trash' ? !(item.item && TRASH_KIND[item.kind]) : k === 'scrapbooks' ? !Array.isArray(item.noteIds) : typeof item.mesId !== 'number') continue;
+                for (const raw of Array.isArray(json.data[k]) ? json.data[k] : []) {
+                    const item = k === 'trash' ? cleanTrash(raw) : cleanItem(k, raw);
+                    if (!item) { skipped++; continue; }
+                    if (have.has(item.id)) continue;
+                    if (k !== 'trash' && k !== 'scrapbooks' && item.mesId >= (ctx().chat?.length ?? 0)) { skipped++; continue; }
+                    have.add(item.id);
                     d[k].push(item);
                     added++;
                 }
@@ -4598,7 +4871,7 @@ function openExport() {
             decorateAll();
             refreshPanel();
             closeModal();
-            toastr.success(`${added}개 항목을 불러왔어요.`);
+            toastr.success(`${added}개 항목을 불러왔어요.${skipped ? ` (알아볼 수 없거나 이 채팅에 없는 메시지를 가리키는 ${skipped}개는 건너뛰었어요)` : ''}`);
         } catch {
             toastr.error('책 먹는 여우 백업 파일이 아니에요.');
         }
@@ -4699,7 +4972,7 @@ function buildWandItem() {
 // ---------------------------------------------------------------- slash commands
 
 function registerCommands() {
-    const { SlashCommandParser, SlashCommand, SlashCommandArgument, ARGUMENT_TYPE } = ctx();
+    const { SlashCommandParser, SlashCommand, SlashCommandArgument, SlashCommandNamedArgument, ARGUMENT_TYPE } = ctx();
     if (!SlashCommandParser || !SlashCommand) return;
     try {
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
@@ -4715,21 +4988,84 @@ function registerCommands() {
             })],
             helpString: '<div>책 먹는 여우 독서 패널을 엽니다. 예: <code>/bookfox notes</code></div>',
         }));
+        // at=N (message number, negative counts from the end; default: the last message)
+        const atArg = () => SlashCommandNamedArgument?.fromProps
+            ? SlashCommandNamedArgument.fromProps({ name: 'at', description: '메시지 번호 (비우면 마지막 메시지, -2는 끝에서 두 번째)', typeList: [ARGUMENT_TYPE.NUMBER], isRequired: false })
+            : null;
+        const named = () => [atArg()].filter(Boolean);
+        const target = (args) => {
+            const len = ctx().chat?.length ?? 0;
+            if (!len || !hasChat()) { toastr.info('채팅을 먼저 열어 주세요.'); return null; }
+            let i = args?.at === undefined || args.at === '' ? len - 1 : Number(args.at);
+            if (!Number.isInteger(i)) { toastr.warning('at= 에는 메시지 번호를 적어 주세요.'); return null; }
+            if (i < 0) i = len + i;
+            if (i < 0 || i >= len) { toastr.warning(`${args.at}번 메시지가 없어요.`); return null; }
+            return i;
+        };
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: 'bm',
-            callback: async (_args, value) => {
-                const len = ctx().chat?.length ?? 0;
-                if (!len) return '';
-                const i = len - 1;
+            callback: async (args, value) => {
+                const i = target(args);
+                if (i === null) return '';
                 if (bookmarkAt(i)) { await toggleBookmark(i, false); return ''; }
-                data().bookmarks.push({ id: uid(), mesId: i, label: String(value ?? '').trim(), created: Date.now(), sig: sigAt(i) });
+                data().bookmarks.push({ id: uid(), mesId: i, label: String(value ?? '').trim(), created: Date.now(), ...anchorOf(i) });
                 persist(); decorateMessage(i); refreshPanel();
                 toastr.success('🦊 책갈피를 꽂았어요.');
+                return String(i);
+            },
+            returns: '책갈피를 꽂은 메시지 번호',
+            namedArgumentList: named(),
+            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '책갈피 이름 (선택)', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
+            helpString: '<div>메시지에 책갈피를 꽂습니다(이미 있으면 뺍니다). 예: <code>/bm 고백 장면</code>, <code>/bm at=12 첫 만남</code></div>',
+        }));
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'chapter',
+            callback: async (args, value) => {
+                const i = target(args);
+                if (i === null) return '';
+                const d = data();
+                const num = sortedChapters().filter(c => c.mesId < i).length + 1;
+                const title = String(value ?? '').trim() || `${num}장`;
+                const existing = d.chapters.find(c => c.mesId === i);
+                if (existing) existing.title = title;
+                else d.chapters.push({ id: uid(), mesId: i, title, created: Date.now(), ...anchorOf(i) });
+                persist(); decorateChapters(); refreshPanel();
+                toastr.success(`🦊 ${existing ? '챕터 이름을 바꿨어요' : '새 챕터를 열었어요'}: ${title}`);
+                return String(i);
+            },
+            returns: '챕터가 시작하는 메시지 번호',
+            namedArgumentList: named(),
+            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '챕터 제목', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
+            helpString: '<div>이 메시지부터 새 챕터를 엽니다(이미 챕터면 이름만 바꿉니다). 예: <code>/chapter 비 오는 서점</code>, <code>/chapter at=40 재회</code></div>',
+        }));
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'memo',
+            callback: async (args, value) => {
+                const i = target(args);
+                if (i === null) return '';
+                const text = String(value ?? '').trim();
+                if (!text) { openMemoEditor({ mesId: i }); return ''; }
+                createNote({ mesId: i, memo: text });
+                toastr.success('🦊 메모를 남겼어요.');
+                return String(i);
+            },
+            returns: '메모를 단 메시지 번호',
+            namedArgumentList: named(),
+            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '메모 내용 (#태그 가능, 비우면 메모 창이 열려요)', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
+            helpString: '<div>메시지 전체에 메모를 남깁니다. 예: <code>/memo 여기서 복선 #떡밥</code>, <code>/memo at=-2 다시 읽기</code></div>',
+        }));
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'quotecard',
+            aliases: ['bfcard'],
+            callback: async (args) => {
+                const i = target(args);
+                if (i === null) return '';
+                openCard({ mesId: i });
                 return '';
             },
             returns: 'nothing',
-            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '책갈피 이름 (선택)', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
-            helpString: '<div>마지막 메시지에 책갈피를 꽂습니다(다시 쓰면 뺍니다). 예: <code>/bm 고백 장면</code></div>',
+            namedArgumentList: named(),
+            helpString: '<div>메시지로 명대사 카드 편집 창을 엽니다. 예: <code>/quotecard</code>, <code>/quotecard at=12</code></div>',
         }));
     } catch (err) {
         console.warn('[BookFox] slash command registration failed', err);
@@ -4761,16 +5097,25 @@ function bindGlobal() {
     eventSource.on(E.USER_MESSAGE_RENDERED, one);
     if (E.MESSAGE_UPDATED) eventSource.on(E.MESSAGE_UPDATED, one);
     eventSource.on(E.MESSAGE_SWIPED, (id) => setTimeout(() => one(id), 0));
-    eventSource.on(E.MESSAGE_EDITED, (id) => {
+    // The text of message i changed in place (edit, swipe, regenerate, continue): its items stay put, keep their fingerprints fresh.
+    const refreshAnchors = (id) => {
         const i = Number(id);
         if (!hasChat() || isNaN(i)) return;
         const d = data();
-        const sig = sigAt(i);
-        for (const item of [...d.bookmarks, ...d.chapters, ...d.notes]) if (item.mesId === i) item.sig = sig;
-        persist();
-        refreshPanel();
-    });
-    eventSource.on(E.MESSAGE_DELETED, () => { reconcile(); setTimeout(decorateAll, 30); refreshPanel(); });
+        let changed = false;
+        const own = sigAt(i);
+        for (const item of [...d.bookmarks, ...d.chapters, ...d.notes]) {
+            if (item.mesId === i && item.sig !== own) { item.sig = own; changed = true; }
+            if (item.mesId === i + 1 && item.psig !== own) { item.psig = own; changed = true; }
+        }
+        chatRev++;
+        if (changed) { persist(); refreshPanel(); }
+    };
+    eventSource.on(E.MESSAGE_EDITED, refreshAnchors);
+    eventSource.on(E.MESSAGE_SWIPED, refreshAnchors);
+    if (E.MESSAGE_UPDATED) eventSource.on(E.MESSAGE_UPDATED, refreshAnchors);
+    eventSource.on(E.MESSAGE_RECEIVED, refreshAnchors);
+    eventSource.on(E.MESSAGE_DELETED, () => { chatRev++; reconcile(); setTimeout(decorateAll, 30); refreshPanel(); });
     if (E.MORE_MESSAGES_LOADED) eventSource.on(E.MORE_MESSAGES_LOADED, () => decorateAll());
 
     // message buttons (delegated)
